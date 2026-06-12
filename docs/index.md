@@ -6,6 +6,8 @@ systems. This directory is the deep-dive companion to the top-level
 
 ## Contents
 
+- [Benchmarks](BENCHMARKS.md) — measured detection/FPR on the bundled set **and** the public `deepset` set (regex-only vs. classifier).
+- [Comparison](COMPARISON.md) — competitive audit + capability matrix vs. LLM Guard, LlamaFirewall, NeMo, Guardrails, Rebuff.
 - [Security model](security-model.md) — threat taxonomy, layers, trust boundaries.
 - [Detectors](detectors.md) — every built-in detector and what it catches.
 - [Configuration](configuration.md) — modes, policy, weights, and YAML reference.

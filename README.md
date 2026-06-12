@@ -65,11 +65,13 @@ print(result.safe_text)            # safe fallback message
 - **Extensible & lightweight.** Add a detector/responder in ~10 lines or ship a
   plugin. Tiny core dependency set; ML/PII/datasets are optional extras.
 
-> **Benchmark (bundled, offline — run `shadowshield benchmark`):** 100% detection,
-> **0% false positives** (incl. hard negatives), 0.16 ms p50, on 75 labelled
-> examples. This is a regression baseline, *not* a SOTA claim — see
-> [docs/COMPARISON.md](docs/COMPARISON.md) for the honest framing and external
-> validation path.
+> **Benchmarks — measured, not claimed** ([full results](docs/BENCHMARKS.md)):
+> On the public `deepset/prompt-injections` test set, the deterministic tiers hit
+> **18% recall at 0% false positives / 100% precision**; adding the optional
+> DeBERTa classifier lifts that to **45% recall — still 0% false positives**. The
+> bundled offline set (`shadowshield benchmark`) scores 100%/0-FP, but that's an
+> in-distribution **regression baseline, not a SOTA claim**. We publish the
+> humbling external number on purpose — a credible security tool shows its homework.
 
 ---
 

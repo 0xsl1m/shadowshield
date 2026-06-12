@@ -39,12 +39,21 @@ Run it yourself: `shadowshield benchmark` (zero network, zero extra deps).
 | Latency p50 / p95 | **0.16 ms / 0.21 ms** |
 
 **Honesty note (this matters).** 100% on our *own* curated set is a **regression
-baseline and smoke test, not a claim of SOTA.** Per the 2026 distribution-shift
-literature ("When Benchmarks Lie"), public-classifier numbers collapse under real
-distribution shift, so a single in-distribution score proves little. The bundled
-set's value is: (a) it includes NotInject-style **hard negatives** so the 0% FPR
-is meaningful, and (b) it locks in a CI regression guard. For external validation,
-the harness loads public corpora:
+baseline and smoke test, not a claim of SOTA.** The real number is the external
+one — measured on `deepset/prompt-injections` (test split, 116 ex):
+
+| config | recall | FPR | precision |
+|---|---:|---:|---:|
+| deterministic tiers | 18.3% | 0% | 100% |
+| + DeBERTa classifier | **45.0%** | **0%** | **100%** |
+
+Full results + reproduction in **[BENCHMARKS.md](BENCHMARKS.md)**. The takeaways:
+the deterministic tier is high-precision/low-recall (English-centric signatures),
+the classifier 2.5×'s recall at **zero false-positive cost**, and even then we
+publish a humbling 45% rather than a cherry-picked figure. Per the 2026
+distribution-shift literature ("When Benchmarks Lie"), in-distribution scores
+collapse under real shift — so the bundled 100% only proves we don't regress on
+our own catalogue. For external validation, the harness loads public corpora:
 
 ```bash
 pip install "shadowshield[datasets]"
