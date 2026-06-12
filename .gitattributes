@@ -1,0 +1,15 @@
+# Normalize line endings to LF in the repo (consistent diffs across OSes).
+* text=auto eol=lf
+
+# Explicit text types
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.jsonl text eol=lf
+*.cfg   text eol=lf
+*.txt   text eol=lf
+
+# Keep these exactly as-is
+LICENSE text eol=lf

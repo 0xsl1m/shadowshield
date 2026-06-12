@@ -1,0 +1,146 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shadowshield"
+version = "0.2.0"
+description = "Unified open-source security shield for agentic AI systems — inspired by Sentinel & ShadowClaw."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "ShadowShield Contributors" },
+]
+keywords = [
+    "llm",
+    "security",
+    "prompt-injection",
+    "ai-safety",
+    "agentic-ai",
+    "guardrails",
+    "jailbreak-detection",
+    "llm-security",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+# Core dependencies — kept deliberately small. Everything heavyweight is an extra.
+dependencies = [
+    "pydantic>=2.5",
+    "structlog>=24.1",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+    "tiktoken>=0.6",
+]
+
+[project.optional-dependencies]
+# Transformer prompt-injection classifier (the ML detection layer).
+transformers = ["transformers>=4.40", "torch>=2.2"]
+# Anomaly detection via classical ML (optional, lazy-imported).
+ml = ["scikit-learn>=1.3", "numpy>=1.24"]
+# High-accuracy PII detection backend.
+pii = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
+# Load public benchmark datasets (deepset/prompt-injections, etc.).
+datasets = ["datasets>=2.18"]
+# FastAPI dashboard + CLI server.
+dashboard = ["fastapi>=0.110", "uvicorn>=0.29"]
+# Framework integrations (only needed if you wire ShadowShield into them).
+langchain = ["langchain-core>=0.2"]
+# Everything, for convenience.
+all = [
+    "transformers>=4.40",
+    "torch>=2.2",
+    "scikit-learn>=1.3",
+    "numpy>=1.24",
+    "presidio-analyzer>=2.2",
+    "presidio-anonymizer>=2.2",
+    "datasets>=2.18",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "langchain-core>=0.2",
+]
+# Development & test tooling.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.23",
+    "mypy>=1.10",
+    "ruff>=0.4",
+    "types-PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/0xsl1m/shadowshield"
+Documentation = "https://github.com/0xsl1m/shadowshield#readme"
+Repository = "https://github.com/0xsl1m/shadowshield"
+Issues = "https://github.com/0xsl1m/shadowshield/issues"
+Changelog = "https://github.com/0xsl1m/shadowshield/blob/main/CHANGELOG.md"
+
+[project.scripts]
+shadowshield = "shadowshield.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shadowshield"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/examples",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests that exercise multiple layers together",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",   # line length handled by formatter
+    # This is a security tool: it intentionally embeds homoglyphs/confusables,
+    # ellipses, bidi controls, and datamark sentinels in source and tests.
+    "RUF001", # ambiguous unicode in strings (intentional — confusables)
+    "RUF002", # ambiguous unicode in docstrings
+    "RUF003", # ambiguous unicode in comments
+    # __all__ lists are grouped logically (by layer), not alphabetically.
+    "RUF022",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+files = ["src/shadowshield"]
+
+[tool.coverage.run]
+source = ["shadowshield"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

@@ -1,0 +1,95 @@
+# ShadowShield default configuration.
+#
+# This file documents every knob. Load it with:
+#     Shield.from_yaml("path/to/this.yaml")
+# Or start from a named mode and override only what you need:
+#     Shield.for_mode("strict", block_threshold=0.4)
+#
+# `mode` seeds the defaults (strict | balanced | permissive); the keys below
+# layer on top of that preset.
+
+mode: balanced
+
+# Raise ThreatBlockedError from Shield.scan() on a block (default: false — scan
+# is non-throwing; use Shield.guard() for fail-closed ergonomics instead).
+raise_on_block: false
+
+# Aggregate score (0..1) at/above which a payload is forced to BLOCK regardless
+# of the per-severity policy below. Lower = more cautious.
+block_threshold: 0.65
+
+# Hard cap on characters scanned per payload (resource-exhaustion guard).
+# Oversized inputs are scanned as a truncated prefix and flagged. 0 = unlimited.
+max_input_chars: 100000
+
+# Severity -> Decision mapping. Decisions: allow | flag | sanitize | block | escalate.
+policy:
+  none: allow
+  low: flag
+  medium: sanitize
+  high: block
+  critical: block
+
+# Per-detector toggles, trust weights (scale a detector's score contribution),
+# and detector-specific options. Omit a detector to use its defaults.
+detectors:
+  prompt_injection:
+    enabled: true
+    weight: 1.2          # trust the flagship detector a little more
+  jailbreak:
+    enabled: true
+    weight: 1.0
+  encoding_obfuscation:
+    enabled: true
+    weight: 1.0
+  data_exfiltration:
+    enabled: true
+    weight: 1.1
+  anomaly:
+    enabled: true
+    weight: 0.8          # heuristic — corroborating, not decisive
+    options:
+      max_length: 8000
+      special_ratio_threshold: 0.45
+      entropy_threshold: 5.2
+  pii:
+    enabled: true        # output-side leak protection; input PII is LOW (informational)
+    weight: 1.0
+    # options:
+    #   kinds: [ssn, credit_card]   # restrict to specific PII kinds
+  canary_leak:
+    enabled: true        # zero-cost unless you issue canary tokens (shield.issue_canary())
+    weight: 1.5          # a leaked canary is a confirmed breach — trust it highly
+  alignment_check:
+    enabled: true        # only fires with an objective set AND Shield(alignment_judge=...)
+    weight: 1.2
+  llm_self_check:
+    enabled: true        # only fires if llm_check.enabled AND a judge is wired in
+  # transformer_classifier is OPT-IN (not auto-registered) — enable via
+  # Shield(use_transformer=True) or extra_detectors=[TransformerDetector()].
+
+# Kill-switch: names listed here are forced off no matter what `detectors` says.
+disabled_detectors: []
+
+# Optional LLM "second opinion". Disabled by default — it costs a model call.
+# When enabled, supply a judge: Shield(llm_judge=my_judge). The judge is only
+# consulted once the cheap tiers already scored >= min_score_to_invoke.
+llm_check:
+  enabled: false
+  min_score_to_invoke: 0.35
+  timeout_seconds: 8.0
+
+# Sliding-window per-identity throttle. Escalates an identity to BLOCK once it
+# exceeds max_events flagged events within window_seconds.
+rate_limit:
+  enabled: false
+  max_events: 60
+  window_seconds: 60.0
+  count_only_threats: true
+
+# Structured logging + JSONL audit trail.
+logging:
+  enabled: true
+  audit_path: null        # e.g. "shadowshield_audit.jsonl"; null = structlog only
+  redact_payloads: true   # never write raw offending text to the audit log
+  level: INFO
