@@ -139,14 +139,20 @@ test in your CI (`SHADOWSHIELD_RUN_MODEL_TESTS=1` with `[transformers]`) — its
 benchmark number (AgentDojo/PINT), a CI run on a real runner, and audit-log
 rotation. None are blockers for an internal/self-hosted deployment.
 
+## Shipped since the audit
+
+- ✅ **Vector-similarity self-hardening tier** (Rebuff layer 3) — `use_vectors=True`,
+  `shield.harden()`. Bundled multilingual corpus; +1.7pp recall at 0% FPR.
+- ✅ **Multilingual signatures** (de/es/fr/it/pt) — +5pp recall on deepset, 0% FPR.
+- ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; ready to run.
+
 ## Honest remaining gaps (roadmap)
 
-- **Published AgentDojo / InjecAgent numbers.** The harness supports external
-  datasets; we have not yet published an agent-ASR-at-fixed-utility figure. *(highest priority)*
-- **Vector-similarity self-hardening loop** (Rebuff layer 3): embed canary-caught
-  attacks into an index to catch paraphrases. Designed, not yet shipped.
+- **Published AgentDojo / InjecAgent numbers.** The adapter is built and tested;
+  running the suite needs an LLM API key. The ASR-at-fixed-utility figure is the
+  next milestone. *(highest priority)*
+- **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
+  requires a HuggingFace license/login to benchmark.
 - **Presidio PII backend** is wired as an optional extra but the analyzer adapter
-  is not yet implemented (regex layer ships today).
-- **Multilingual** detection leans on the optional Prompt-Guard-2 model; the
-  built-in signatures are English-centric.
+  is not yet implemented (the regex PII layer ships today).
 - **FastAPI dashboard/server** (the `[dashboard]` extra) is reserved, not built.

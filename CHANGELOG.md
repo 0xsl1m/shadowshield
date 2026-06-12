@@ -4,6 +4,34 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-06-12
+
+Vector-similarity tier, self-hardening, AgentDojo adapter, and split CI.
+
+### Added
+- **Vector-similarity detector** (`VectorSimilarityDetector`, `[vectors]` extra) —
+  embeds input and matches it against a bundled multilingual attack corpus via
+  cosine similarity, catching *paraphrases* and *translations* the regex misses.
+  Opt-in via `Shield(use_vectors=True)`. Default model:
+  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`.
+- **Self-hardening** — `Shield.harden(text)` / `VectorSimilarityDetector.add_attack`
+  append confirmed attacks to the live index (the Rebuff loop, now maintained).
+- **AgentDojo defense adapter** — `shadowshield.integrations.make_agentdojo_defense`
+  exposes ShadowShield as an AgentDojo `PipelineElement` (scans tool outputs, aborts
+  on injection), plus a standalone `scan_messages_for_injection` helper.
+
+### Measured (deepset/prompt-injections test split — the full layer ladder)
+All at **0% false positives / 100% precision**:
+regex 18.3% → +multilingual 23.3% → **+vector 25.0%** → +classifier 48.3%.
+
+### Changed
+- **CI split** into a fast `core` job (lint/type/test, no heavy ML — seconds) and a
+  separate `ml-integration` job that exercises the classifier + vector tiers against
+  real models. PRs get fast feedback; the badge isn't blocked by model downloads.
+
+### Notes
+- Test count 111 → **121** (+2 skipped real-model integration tests).
+
 ## [0.3.0] — 2026-06-12
 
 Multilingual detection + measured external benchmarks.
@@ -100,6 +128,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.4.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.4.0
 [0.3.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.3.0
 [0.2.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.2.0
 [0.1.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.1.0

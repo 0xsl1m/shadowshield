@@ -28,10 +28,12 @@ from .llm_check import (
 from .pii import PIIDetector
 from .prompt_injection import PromptInjectionDetector
 
-# NOTE: TransformerDetector is intentionally NOT auto-registered — it pulls a
-# heavy model, so it's opt-in (pass via extra_detectors or use_transformer=True).
+# NOTE: TransformerDetector and VectorSimilarityDetector are intentionally NOT
+# auto-registered — they pull models, so they're opt-in (via extra_detectors or
+# the Shield use_transformer= / use_vectors= flags).
 from .transformer import DEFAULT_MODEL as DEFAULT_TRANSFORMER_MODEL
 from .transformer import TransformerDetector
+from .vector import DEFAULT_EMBED_MODEL, VectorSimilarityDetector
 
 __all__ = [
     # framework
@@ -49,9 +51,11 @@ __all__ = [
     "PIIDetector",
     "CanaryLeakDetector",
     "LLMSelfCheckDetector",
-    # opt-in ML detector
+    # opt-in model-backed detectors
     "TransformerDetector",
     "DEFAULT_TRANSFORMER_MODEL",
+    "VectorSimilarityDetector",
+    "DEFAULT_EMBED_MODEL",
     # llm-check helpers
     "LLMJudge",
     "LLMJudgement",

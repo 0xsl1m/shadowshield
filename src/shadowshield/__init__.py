@@ -50,6 +50,7 @@ from .detectors import (
     LLMJudgement,
     ScanContext,
     TransformerDetector,
+    VectorSimilarityDetector,
     make_keyword_judge,
     register_detector,
     registered_detectors,
@@ -59,7 +60,7 @@ from .middleware.decorators import get_default_shield, protect, set_default_shie
 from .plugins import PluginManager, ShadowShieldPlugin
 from .responders import Responder, spotlight
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "__version__",
@@ -96,6 +97,7 @@ __all__ = [
     "AlignmentJudge",
     "AlignmentVerdict",
     "TransformerDetector",
+    "VectorSimilarityDetector",
     # extension
     "Detector",
     "Responder",

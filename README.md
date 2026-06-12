@@ -66,14 +66,13 @@ print(result.safe_text)            # safe fallback message
   plugin. Tiny core dependency set; ML/PII/datasets are optional extras.
 
 > **Benchmarks — measured, not claimed** ([full results](docs/BENCHMARKS.md)):
-> On the public `deepset/prompt-injections` test set, the deterministic tiers
-> (regex + **multilingual** signatures) hit **23% recall at 0% false positives /
-> 100% precision**; adding the optional DeBERTa classifier lifts that to **48%
-> recall — still 0% false positives**. Every layer adds recall without eroding the
-> zero-over-defense property. The bundled offline set (`shadowshield benchmark`)
-> scores 100%/0-FP, but that's an in-distribution **regression baseline, not a SOTA
-> claim**. We publish the humbling external number on purpose — a credible security
-> tool shows its homework.
+> On the public `deepset/prompt-injections` test set, an additive layer ladder —
+> all at **0% false positives / 100% precision**: regex **18%** → +multilingual
+> signatures **23%** → +vector similarity **25%** → +DeBERTa classifier **48%**
+> recall. Every layer adds detection without eroding the zero-over-defense property.
+> The bundled offline set (`shadowshield benchmark`) scores 100%/0-FP, but that's an
+> in-distribution **regression baseline, not a SOTA claim**. We publish the humbling
+> external numbers on purpose — a credible security tool shows its homework.
 
 ---
 
@@ -119,8 +118,9 @@ ShadowShield *one* system rather than two bolted together.
 ## Installation
 
 ```bash
-pip install shadowshield                   # core (regex + heuristic + canary + PII + responders)
+pip install shadowshield                   # core (regex + multilingual + canary + PII + responders)
 pip install "shadowshield[transformers]"   # + DeBERTa ML classifier layer
+pip install "shadowshield[vectors]"        # + vector-similarity (paraphrase / cross-lingual)
 pip install "shadowshield[pii]"            # + Presidio PII backend
 pip install "shadowshield[datasets]"       # + load public benchmark datasets
 pip install "shadowshield[langchain]"      # + LangChain integration
@@ -256,12 +256,28 @@ with shield.session(objective="Summarize my inbox") as s:
     result = s.scan_output(model_action)   # flags "transfer $5000" as off-objective
 ```
 
-### Optional ML classifier (DeBERTa)
+### Optional recall layers (compose to your latency budget)
 
 ```python
-# pip install "shadowshield[transformers]"
+# DeBERTa classifier — biggest recall jump.  pip install "shadowshield[transformers]"
 shield = ss.Shield.for_mode("strict", use_transformer=True)   # ProtectAI v2 by default
-# or a specific model: use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"
+# multilingual model: use_transformer="meta-llama/Llama-Prompt-Guard-2-22M" (gated; HF login)
+
+# Vector similarity — catches paraphrases/translations of known attacks, self-hardening.
+# pip install "shadowshield[vectors]"
+shield = ss.Shield.for_mode("strict", use_vectors=True)
+shield.harden("a confirmed attack string")   # teach the index (e.g. after a canary leak)
+
+# Stack them — each adds recall at zero false-positive cost (see docs/BENCHMARKS.md):
+shield = ss.Shield.for_mode("strict", use_transformer=True, use_vectors=True)
+```
+
+### Agentic benchmark (AgentDojo)
+
+```python
+# pip install agentdojo  (+ an LLM API key)
+from shadowshield.integrations import make_agentdojo_defense
+pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores ASR + utility
 ```
 
 ### Async
@@ -380,10 +396,12 @@ entry-point group — see [`CONTRIBUTING.md`](CONTRIBUTING.md) and
 ```
 src/shadowshield/
 ├── core/          unified engine, config, policy, session, canary, Shield
-├── detectors/     prompt_injection · jailbreak · encoding · exfiltration · pii ·
-│                  anomaly · canary · alignment · llm_check · transformer (opt-in)
+├── detectors/     prompt_injection (+multilingual) · jailbreak · encoding ·
+│                  exfiltration · pii · anomaly · canary · alignment · llm_check ·
+│                  transformer (opt-in) · vector (opt-in, self-hardening)
 ├── responders/    sanitizer · blocker · isolator (spotlight) · rate_limiter
 ├── middleware/    decorators · openai · langchain
+├── integrations/  agentdojo defense adapter
 ├── eval/          benchmark harness + bundled offline dataset
 ├── plugins/       extension system
 ├── utils/         normalization · logging · scoring

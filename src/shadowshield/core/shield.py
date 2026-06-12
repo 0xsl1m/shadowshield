@@ -53,6 +53,7 @@ class Shield:
         extra_responders: list[Responder] | None = None,
         isolate_flagged: bool = False,
         use_transformer: bool | str = False,
+        use_vectors: bool | str = False,
     ) -> None:
         self.config = config or ShieldConfig.for_mode(Mode.BALANCED)
         self._audit = AuditLog(self.config.logging)
@@ -69,6 +70,14 @@ class Shield:
 
             model = use_transformer if isinstance(use_transformer, str) else None
             detectors.append(TransformerDetector(model) if model else TransformerDetector())
+        # Opt-in vector-similarity layer (paraphrase / cross-lingual matching).
+        if use_vectors:
+            from ..detectors.vector import VectorSimilarityDetector
+
+            vmodel = use_vectors if isinstance(use_vectors, str) else None
+            detectors.append(
+                VectorSimilarityDetector(vmodel) if vmodel else VectorSimilarityDetector()
+            )
         if extra_detectors:
             detectors.extend(extra_detectors)
         self._detectors = detectors
@@ -216,6 +225,23 @@ class Shield:
         flags a confirmed exfiltration. See :mod:`shadowshield.core.canary`.
         """
         return self.canaries.issue(prefix=prefix, note=note)
+
+    def harden(self, text: str) -> bool:
+        """Teach the vector-similarity layer a confirmed attack (self-hardening).
+
+        Appends ``text`` to every active :class:`VectorSimilarityDetector`'s index
+        so future inputs resembling it (or its paraphrases/translations) match.
+        Call after an incident — e.g. a canary-caught exfiltration. Returns True if
+        a vector detector was present to harden; False otherwise (no-op).
+        """
+        from ..detectors.vector import VectorSimilarityDetector
+
+        hardened = False
+        for det in self._detectors:
+            if isinstance(det, VectorSimilarityDetector):
+                det.add_attack(text)
+                hardened = True
+        return hardened
 
     # ------------------------------------------------------------------ #
     # Agentic guarding: tool calls & tool results are untrusted too

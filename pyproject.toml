@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shadowshield"
-version = "0.3.0"
+version = "0.4.0"
 description = "Unified open-source security shield for agentic AI systems — inspired by Sentinel & ShadowClaw."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,8 @@ dependencies = [
 [project.optional-dependencies]
 # Transformer prompt-injection classifier (the ML detection layer).
 transformers = ["transformers>=4.40", "torch>=2.2"]
+# Vector-similarity detector (paraphrase / cross-lingual attack matching).
+vectors = ["sentence-transformers>=2.7", "numpy>=1.24"]
 # Anomaly detection via classical ML (optional, lazy-imported).
 ml = ["scikit-learn>=1.3", "numpy>=1.24"]
 # High-accuracy PII detection backend.
@@ -61,6 +63,7 @@ langchain = ["langchain-core>=0.2"]
 all = [
     "transformers>=4.40",
     "torch>=2.2",
+    "sentence-transformers>=2.7",
     "scikit-learn>=1.3",
     "numpy>=1.24",
     "presidio-analyzer>=2.2",
@@ -78,6 +81,7 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.4",
     "types-PyYAML>=6.0",
+    "numpy>=1.24",
 ]
 
 [project.urls]
