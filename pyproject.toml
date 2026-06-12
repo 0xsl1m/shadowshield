@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shadowshield"
-version = "0.2.0"
+version = "0.3.0"
 description = "Unified open-source security shield for agentic AI systems — inspired by Sentinel & ShadowClaw."
 readme = "README.md"
 requires-python = ">=3.10"

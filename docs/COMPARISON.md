@@ -44,13 +44,13 @@ one — measured on `deepset/prompt-injections` (test split, 116 ex):
 
 | config | recall | FPR | precision |
 |---|---:|---:|---:|
-| deterministic tiers | 18.3% | 0% | 100% |
-| + DeBERTa classifier | **45.0%** | **0%** | **100%** |
+| deterministic (regex + multilingual sigs) | 23.3% | 0% | 100% |
+| + DeBERTa classifier | **48.3%** | **0%** | **100%** |
 
 Full results + reproduction in **[BENCHMARKS.md](BENCHMARKS.md)**. The takeaways:
-the deterministic tier is high-precision/low-recall (English-centric signatures),
-the classifier 2.5×'s recall at **zero false-positive cost**, and even then we
-publish a humbling 45% rather than a cherry-picked figure. Per the 2026
+the deterministic tier is high-precision/low-recall, multilingual signatures
+(de/es/fr/it/pt) and the classifier each add recall at **zero false-positive
+cost**, and even then we publish a humbling 48% rather than a cherry-picked figure. Per the 2026
 distribution-shift literature ("When Benchmarks Lie"), in-distribution scores
 collapse under real shift — so the bundled 100% only proves we don't regress on
 our own catalogue. For external validation, the harness loads public corpora:

@@ -189,8 +189,140 @@ _INDIRECT_SIGNATURES: tuple[Signature, ...] = (
     ),
 )
 
+# Multilingual injection signatures. Most OSS guards are English-only at the
+# signature tier; these cover the override / extraction / persona-reassignment
+# templates in the major European languages so non-English injections aren't
+# silently missed. (For broader multilingual ML coverage, pair with a multilingual
+# classifier — see TransformerDetector / docs/BENCHMARKS.md.)
+_MULTILINGUAL_SIGNATURES: tuple[Signature, ...] = (
+    # --- German ---
+    _sig(
+        r"\b(?:ignoriere?|missachte|vergiss|verwirf|überschreibe)\b[\w\s,'’äöüß]{0,40}?"
+        r"\b(?:vorherigen?|bisherigen?|obigen?|vorhergehenden?|alle[nr]?|deine[nr]?|"
+        r"system)\b[\w\s,'’äöüß]{0,20}?"
+        r"\b(?:anweisung(?:en)?|befehle?|regeln?|anordnungen?|anweisungen|vorgaben?)\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.88,
+        "Instruction-override attempt (German: 'ignoriere vorherige Anweisungen').",
+    ),
+    _sig(
+        r"\bvergiss\b[\w\s,'’äöüß]{0,15}?\balles\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.8,
+        "Instruction-override attempt (German: 'vergiss alles').",
+    ),
+    _sig(
+        r"\bab (?:jetzt|sofort|nun)\b[\w\s,'’äöüß]{0,15}?\b(?:bist|wirst|musst|sollst) du\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.62,
+        "Behavioural reassignment (German: 'ab jetzt bist du …').",
+    ),
+    _sig(
+        r"\bdu bist (?:jetzt|ab sofort|nun)\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.55,
+        "Identity reassignment (German: 'du bist jetzt …').",
+    ),
+    _sig(
+        r"\b(?:zeige?|gib|nenne|verrate?|offenbare)\b[\w\s,'’äöüß]{0,20}?"
+        r"\b(?:deine?|die)\b[\w\s,'’äöüß]{0,25}?\b(?:system[- ]?prompt|anweisungen|systemnachricht)\b",
+        ThreatCategory.DATA_EXFILTRATION,
+        Severity.HIGH,
+        0.8,
+        "System-prompt extraction (German: 'zeige deine Anweisungen').",
+    ),
+    # --- Spanish ---
+    _sig(
+        r"\b(?:ignora|olvida|descarta|haz caso omiso de|anula)\b[\w\s,'’áéíóúñ]{0,40}?"
+        r"\b(?:todas?|las|tus|anteriores|previas|el sistema)?\b[\w\s,'’áéíóúñ]{0,20}?"
+        r"\b(?:instruccion(?:es)?|órdenes|reglas|indicaciones)\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.88,
+        "Instruction-override attempt (Spanish: 'ignora las instrucciones anteriores').",
+    ),
+    _sig(
+        r"\b(?:ahora eres|a partir de ahora (?:eres|debes|vas a))\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.6,
+        "Identity reassignment (Spanish: 'ahora eres …').",
+    ),
+    _sig(
+        r"\b(?:muestra|revela|dime|imprime)\b[\w\s,'’áéíóúñ]{0,20}?"
+        r"\b(?:tu|tus|el)\b[\w\s,'’áéíóúñ]{0,12}?\b(?:prompt|instrucciones|sistema)\b",
+        ThreatCategory.DATA_EXFILTRATION,
+        Severity.HIGH,
+        0.8,
+        "System-prompt extraction (Spanish: 'revela tus instrucciones').",
+    ),
+    # --- French ---
+    _sig(
+        r"\b(?:ignore|oublie|néglige|outrepasse|fais abstraction des)\b[\w\s,'’àâçéèêëîïôûù]{0,40}?"
+        r"\b(?:toutes?|les|tes|précédentes?|antérieures?|ci-dessus|système)?\b"
+        r"[\w\s,'’àâçéèêëîïôûù]{0,20}?\b(?:instructions?|consignes?|règles?|ordres?)\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.88,
+        "Instruction-override attempt (French: 'ignore les instructions précédentes').",
+    ),
+    _sig(
+        r"\b(?:tu es (?:maintenant|désormais)|à partir de maintenant,? tu (?:es|dois|vas))\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.6,
+        "Identity reassignment (French: 'tu es maintenant …').",
+    ),
+    _sig(
+        r"\b(?:montre|révèle|affiche|dis-moi)\b[\w\s,'’àâçéèêëîïôûù]{0,20}?"
+        r"\b(?:tes|ton|le)\b[\w\s,'’àâçéèêëîïôûù]{0,12}?\b(?:prompt|instructions?|système)\b",
+        ThreatCategory.DATA_EXFILTRATION,
+        Severity.HIGH,
+        0.8,
+        "System-prompt extraction (French: 'révèle tes instructions').",
+    ),
+    # --- Italian ---
+    _sig(
+        r"\b(?:ignora|dimentica|trascura|scarta)\b[\w\s,'’àèéìòù]{0,40}?"
+        r"\b(?:tutte?|le|tue|precedenti|sistema)?\b[\w\s,'’àèéìòù]{0,20}?"
+        r"\b(?:istruzion[ei]|ordini|regole|indicazioni)\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.88,
+        "Instruction-override attempt (Italian: 'ignora le istruzioni precedenti').",
+    ),
+    _sig(
+        r"\b(?:ora sei|d'ora in poi (?:sei|devi))\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.6,
+        "Identity reassignment (Italian: 'ora sei …').",
+    ),
+    # --- Portuguese ---
+    _sig(
+        r"\b(?:ignore|esqueça|esquece|despreze|descarte)\b[\w\s,'’ãâáàçéêíóôõú]{0,40}?"
+        r"\b(?:todas?|as|suas|anteriores|sistema)?\b[\w\s,'’ãâáàçéêíóôõú]{0,20}?"
+        r"\b(?:instruç(?:ão|ões)|ordens|regras|comandos)\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.88,
+        "Instruction-override attempt (Portuguese: 'ignore as instruções anteriores').",
+    ),
+    _sig(
+        r"\b(?:agora (?:você é|és)|a partir de agora (?:você é|deve))\b",
+        ThreatCategory.ROLE_MANIPULATION,
+        Severity.MEDIUM,
+        0.6,
+        "Identity reassignment (Portuguese: 'agora você é …').",
+    ),
+)
+
 _ALL_SIGNATURES: tuple[Signature, ...] = (
-    _OVERRIDE_SIGNATURES + _FAKE_FRAME_SIGNATURES + _INDIRECT_SIGNATURES
+    _OVERRIDE_SIGNATURES + _FAKE_FRAME_SIGNATURES + _INDIRECT_SIGNATURES + _MULTILINGUAL_SIGNATURES
 )
 
 

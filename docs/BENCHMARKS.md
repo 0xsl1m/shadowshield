@@ -41,15 +41,21 @@ phrasings). This is where in-distribution scores collapse — and ours do too.
 
 | split | n | recall (detection) | FPR | precision | F1 |
 |---|---:|---:|---:|---:|---:|
-| test | 116 | **18.3%** | 0.0% | 100% | 31.0% |
-| train | 546 | **20.2%** | 0.6% | 95.3% | 33.3% |
+| test | 116 | **23.3%** | 0.0% | 100% | 37.8% |
+| train | 546 | **26.1%** | 0.6% | 96.4% | 41.1% |
 
 **Honest read:** the regex/heuristic tier is **high-precision, low-recall** on
-real-world data. When it flags, it's almost always right (≈95–100% precision, ≈0%
-false positives — no over-defense), but it *misses ~80% of attacks* because the
-signatures are English-centric and don't generalise to novel/multilingual
-phrasings. This is exactly why every serious guard in the field wraps a trained
-classifier — and why ShadowShield ships one.
+real-world data. When it flags, it's almost always right (≈96–100% precision, ≈0%
+false positives — no over-defense), but it still *misses the majority of attacks*
+because signatures can't generalise to truly novel phrasings. This is exactly why
+every serious guard in the field wraps a trained classifier — and why ShadowShield
+ships one (below).
+
+> **Multilingual signatures** (added in the multilingual upgrade) cover override /
+> extraction / persona templates in German, Spanish, French, Italian, and
+> Portuguese. On this German-heavy set they lifted deterministic recall from 18.3%
+> → **23.3%** (test) and 20.2% → 26.1% (train) at **zero** false-positive cost —
+> a capability most OSS guards lack entirely at the signature tier.
 
 ### With the DeBERTa classifier (`shadowshield[transformers]`, `use_transformer=True`)
 
@@ -57,19 +63,22 @@ Model: `protectai/deberta-v3-base-prompt-injection-v2` (configurable).
 
 | split | n | recall (detection) | FPR | precision | F1 | p50 |
 |---|---:|---:|---:|---:|---:|---:|
-| test | 116 | **45.0%** | **0.0%** | **100%** | 62.1% | 141 ms |
+| test | 116 | **48.3%** | **0.0%** | **100%** | ~65% | 131 ms |
 
-**The classifier recovers recall — 18.3% → 45.0%, a 2.5× lift — at *zero*
-false-positive cost** (precision and FPR stay perfect). That's the headline: the
-ML layer adds real-world detection *without* eroding ShadowShield's defining
-zero-over-defense property. The deterministic tiers still carry everything the
-classifier can't — obfuscation resistance, output/secret/PII scanning, canary
+**The classifier recovers recall — 23.3% → 48.3% (and the regex-only baseline was
+18.3%) — at *zero* false-positive cost** (precision and FPR stay perfect). That's
+the headline: each layer adds real-world detection *without* eroding ShadowShield's
+defining zero-over-defense property. The deterministic tiers still carry everything
+the classifier can't — obfuscation resistance, output/secret/PII scanning, canary
 detection, and the tool-call + alignment auditing layers.
 
-45% (not higher) is honest, not cherry-picked: `deepset` is heavily German and the
-default model is English-trained. A multilingual model
-(`meta-llama/Llama-Prompt-Guard-2-22M`) is expected to lift recall further on
-non-English inputs — swap it in via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`.
+48% (not higher) is honest, not cherry-picked: `deepset` is heavily German and the
+default classifier is English-trained. For stronger non-English coverage, swap in a
+**multilingual model** — `meta-llama/Llama-Prompt-Guard-2-22M` (mDeBERTa, 22M,
+low-latency) via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`. Note: the
+Prompt-Guard-2 models are **gated** on HuggingFace — accept the license and run
+`huggingface-cli login` (or set `HF_TOKEN`) before first use. The default ProtectAI
+model needs no token.
 
 ## 3. Interpretation & roadmap
 

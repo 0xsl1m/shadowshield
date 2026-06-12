@@ -43,11 +43,11 @@ print(result.safe_text)            # safe fallback message
 - **One shield, two directions.** The *same* engine guards model **input** (user
   prompts, retrieved docs, tool results) and model **output** (secret/PII leaks,
   system-prompt regurgitation). A jailbroken model is still stopped at the exit.
-- **Layered, not a single regex.** Signature matching, normalization-aware
-  matching (zero-width/homoglyph/bidi), encoded-payload decoding, heuristic
-  anomaly scoring, an *optional* DeBERTa classifier, and an *optional* LLM
-  self-check — combined with a noisy-or aggregator so one strong signal is never
-  averaged away.
+- **Layered, not a single regex.** Signature matching (English **+ multilingual**:
+  de/es/fr/it/pt), normalization-aware matching (zero-width/homoglyph/bidi),
+  encoded-payload decoding, heuristic anomaly scoring, an *optional* DeBERTa
+  classifier, and an *optional* LLM self-check — combined with a noisy-or
+  aggregator so one strong signal is never averaged away.
 - **Agent-aware.** Goes beyond text: **tool-call guarding**, **canary tokens**
   (detect *successful* injections), and an **agent-trace alignment audit**
   (goal-hijack detection — the LlamaFirewall pattern). See the
@@ -66,12 +66,14 @@ print(result.safe_text)            # safe fallback message
   plugin. Tiny core dependency set; ML/PII/datasets are optional extras.
 
 > **Benchmarks — measured, not claimed** ([full results](docs/BENCHMARKS.md)):
-> On the public `deepset/prompt-injections` test set, the deterministic tiers hit
-> **18% recall at 0% false positives / 100% precision**; adding the optional
-> DeBERTa classifier lifts that to **45% recall — still 0% false positives**. The
-> bundled offline set (`shadowshield benchmark`) scores 100%/0-FP, but that's an
-> in-distribution **regression baseline, not a SOTA claim**. We publish the
-> humbling external number on purpose — a credible security tool shows its homework.
+> On the public `deepset/prompt-injections` test set, the deterministic tiers
+> (regex + **multilingual** signatures) hit **23% recall at 0% false positives /
+> 100% precision**; adding the optional DeBERTa classifier lifts that to **48%
+> recall — still 0% false positives**. Every layer adds recall without eroding the
+> zero-over-defense property. The bundled offline set (`shadowshield benchmark`)
+> scores 100%/0-FP, but that's an in-distribution **regression baseline, not a SOTA
+> claim**. We publish the humbling external number on purpose — a credible security
+> tool shows its homework.
 
 ---
 

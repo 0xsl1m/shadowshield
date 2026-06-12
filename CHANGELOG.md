@@ -4,6 +4,30 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-06-12
+
+Multilingual detection + measured external benchmarks.
+
+### Added
+- **Multilingual injection signatures** — override / extraction / persona-
+  reassignment templates in **German, Spanish, French, Italian, and Portuguese**,
+  folded into the prompt-injection detector (so they also get decoded-payload and
+  obfuscation handling). Most OSS guards are English-only at the signature tier.
+- `docs/BENCHMARKS.md` — reproducible, honestly-reported results.
+
+### Measured (on `deepset/prompt-injections`, test split — see BENCHMARKS.md)
+- Deterministic tiers: **18.3% → 23.3%** recall after multilingual signatures, at
+  **0% false positives / 100% precision**.
+- With the DeBERTa classifier: **48.3%** recall, **0% FPR**, 100% precision.
+- Every layer adds recall without eroding the zero-over-defense property. The ML
+  classifier code path is now validated end-to-end against a real model + real data.
+
+### Notes
+- For stronger non-English ML coverage, set
+  `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"` (multilingual; **gated** —
+  requires HuggingFace login). The default ProtectAI model needs no token.
+- Test count 94 → **111** (+1 skipped real-model).
+
 ## [0.2.0] — 2026-06-12
 
 The "be the best OSS guard" upgrade — driven by a competitive audit of LLM Guard,
@@ -76,5 +100,6 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.3.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.3.0
 [0.2.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.2.0
 [0.1.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.1.0
