@@ -5,7 +5,7 @@
 **Unified open-source security shield for agentic AI systems — inspired by Sentinel & ShadowClaw.**
 
 [![PyPI](https://img.shields.io/pypi/v/shadowshield.svg)](https://pypi.org/project/shadowshield/)
-[![Website](https://img.shields.io/badge/site-0xsl1m.github.io%2Fshadowshield-bd3a1e.svg)](https://0xsl1m.github.io/shadowshield/)
+[![Website](https://img.shields.io/badge/site-shadowshield.xyz-bd3a1e.svg)](https://shadowshield.xyz/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)

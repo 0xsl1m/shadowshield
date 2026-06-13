@@ -10,8 +10,18 @@ class), so all content is fully visible without JavaScript.
 
 ## Deploy
 
-Published to GitHub Pages by `.github/workflows/pages.yml` on push to `main`.
-One-time setup: **Settings → Pages → Source = GitHub Actions**. Live at
-`https://0xsl1m.github.io/shadowshield/`.
+**Primary — Vercel → `https://shadowshield.xyz`** (domain bought via Vercel; DNS is
+automatic). One-time setup in the Vercel dashboard:
+1. **Add New… → Project → Import** the `0xsl1m/shadowshield` GitHub repo.
+2. **Root Directory:** `site`  ·  **Framework Preset:** Other  ·  no build command.
+3. **Deploy**, then **Settings → Domains → Add `shadowshield.xyz`** (and `www`).
+
+Every push to `main` then auto-deploys (GitHub-integration auto-deploy only — no
+`vercel` CLI). Security headers + clean URLs come from [`vercel.json`](vercel.json).
+
+**Fallback — GitHub Pages** (`.github/workflows/pages.yml`) serves the same files at
+`https://0xsl1m.github.io/shadowshield/`. `rel=canonical` points at shadowshield.xyz,
+so the Vercel domain is authoritative for SEO. Disable the Pages workflow if you
+want Vercel-only.
 
 Preview locally: `python -m http.server -d site 8000` → http://127.0.0.1:8000
