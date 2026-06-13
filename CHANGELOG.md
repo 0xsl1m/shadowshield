@@ -4,6 +4,16 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-06-13
+
+### Added
+- **Landing page** at **https://shadowshield.xyz** (`site/`, deployed on Vercel) —
+  a self-contained "technical broadsheet" page with the honest external benchmark
+  as the hero figure; ships security headers via `site/vercel.json`.
+
+### Changed
+- Project **Homepage** metadata (PyPI + GitHub) now points to `shadowshield.xyz`.
+
 ## [0.5.0] — 2026-06-13
 
 PyPI launch, HTTP server, Presidio PII backend, and CI hardening.
@@ -151,6 +161,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.5.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.1
 [0.5.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.0
 [0.4.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.4.0
 [0.3.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.3.0
