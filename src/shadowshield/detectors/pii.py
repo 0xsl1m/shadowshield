@@ -17,7 +17,9 @@ runs and needs no dependencies.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
 from .base import Detector, ScanContext, register_detector
@@ -59,6 +61,21 @@ def _luhn_valid(digits: str) -> bool:
     return total % 10 == 0
 
 
+# Presidio entity types -> our pii_kind labels (others pass through lowercased).
+_PRESIDIO_KIND = {
+    "EMAIL_ADDRESS": "email",
+    "PHONE_NUMBER": "phone",
+    "CREDIT_CARD": "credit_card",
+    "US_SSN": "ssn",
+    "IP_ADDRESS": "ipv4",
+    "PERSON": "person",
+    "LOCATION": "location",
+    "IBAN_CODE": "iban",
+    "US_PASSPORT": "passport",
+    "MEDICAL_LICENSE": "medical_license",
+}
+
+
 @register_detector
 class PIIDetector(Detector):
     """Detects emails, SSNs, phones, IPs, and Luhn-valid credit-card numbers.
@@ -66,28 +83,72 @@ class PIIDetector(Detector):
     Options (``DetectorConfig.options``):
         kinds: iterable of PII kinds to flag (default: all). E.g. ``["ssn",
             "credit_card"]`` to ignore emails/phones if those are expected.
-        min_score_input: floor severity weight applied to input-side PII.
+        backend: ``"regex"`` (default, zero-dep), ``"presidio"`` (Microsoft
+            Presidio NER+checksum recognizers — broader coverage, needs the
+            ``[pii]`` extra), or ``"both"``. Presidio failures fall back to regex.
+        presidio_score: minimum Presidio confidence to flag (default 0.5).
     """
 
     name = "pii"
+    _analyzer: Any = None  # cached Presidio AnalyzerEngine
 
     def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
         enabled = context.options.get("kinds")
+        backend = context.options.get("backend", "regex")
         threats: list[Threat] = []
 
+        if backend in ("regex", "both"):
+            threats.extend(self._regex_threats(text, enabled, context))
+        if backend in ("presidio", "both"):
+            threats.extend(self._presidio_threats(text, enabled, context))
+        return threats
+
+    def _regex_threats(
+        self, text: str, enabled: Iterable[str] | None, context: ScanContext
+    ) -> list[Threat]:
+        threats: list[Threat] = []
         for pii in _SIMPLE_PATTERNS:
             if enabled is not None and pii.kind not in enabled:
                 continue
             for m in pii.pattern.finditer(text):
                 threats.append(self._make(pii.kind, pii.base_score, m.span(), context))
-
         if enabled is None or "credit_card" in enabled:
             for m in _CARD_CANDIDATE.finditer(text):
                 digits = re.sub(r"[ -]", "", m.group(0))
                 if 13 <= len(digits) <= 19 and _luhn_valid(digits):
                     threats.append(self._make("credit_card", 0.85, m.span(), context))
-
         return threats
+
+    def _presidio_threats(
+        self, text: str, enabled: Iterable[str] | None, context: ScanContext
+    ) -> list[Threat]:
+        analyzer = self._ensure_analyzer()
+        if analyzer is None:  # presidio unavailable -> fail safe to regex
+            return self._regex_threats(text, enabled, context)
+        min_score = float(context.options.get("presidio_score", 0.5))
+        out: list[Threat] = []
+        for res in analyzer.analyze(text=text, language="en"):
+            if res.score < min_score:
+                continue
+            kind = _PRESIDIO_KIND.get(res.entity_type, res.entity_type.lower())
+            if enabled is not None and kind not in enabled:
+                continue
+            out.append(self._make(kind, float(res.score), (res.start, res.end), context))
+        return out
+
+    @classmethod
+    def _ensure_analyzer(cls) -> Any:
+        if cls._analyzer is not None:
+            return cls._analyzer
+        try:
+            from presidio_analyzer import AnalyzerEngine
+        except ImportError:
+            return None
+        try:
+            cls._analyzer = AnalyzerEngine()
+        except Exception:  # spaCy model missing / init failure -> fall back
+            return None
+        return cls._analyzer
 
     @staticmethod
     def _make(kind: str, score: float, span: tuple[int, int], context: ScanContext) -> Threat:

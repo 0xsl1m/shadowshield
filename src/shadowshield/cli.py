@@ -97,6 +97,14 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(args: argparse.Namespace) -> int:
+    from .server import serve
+
+    print(f"ShadowShield server on http://{args.host}:{args.port}  (mode={args.mode})")
+    serve(host=args.host, port=args.port, mode=args.mode)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="shadowshield",
@@ -140,6 +148,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument("--json", action="store_true", help="emit JSON")
     bench.set_defaults(func=_cmd_benchmark)
+
+    serve_p = sub.add_parser("serve", help="run the HTTP server + dashboard")
+    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--port", type=int, default=8000)
+    serve_p.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
+    serve_p.set_defaults(func=_cmd_serve)
     return parser
 
 

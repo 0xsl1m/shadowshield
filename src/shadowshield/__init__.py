@@ -60,7 +60,7 @@ from .middleware.decorators import get_default_shield, protect, set_default_shie
 from .plugins import PluginManager, ShadowShieldPlugin
 from .responders import Responder, spotlight
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "__version__",

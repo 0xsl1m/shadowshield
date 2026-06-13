@@ -4,6 +4,29 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-13
+
+PyPI launch, HTTP server, Presidio PII backend, and CI hardening.
+
+### Added
+- **Published to PyPI** — `pip install shadowshield`. Releases publish
+  automatically via GitHub **Trusted Publishing** (OIDC, no stored tokens); see
+  `docs/RELEASING.md`.
+- **FastAPI server + dashboard** (`[dashboard]` extra) — `shadowshield serve` /
+  `shadowshield.server.create_app`. Endpoints: `GET /health`, `POST /scan`,
+  `POST /guard`, and a minimal live `GET /` dashboard.
+- **Presidio PII backend** — the `pii` detector now takes a `backend` option
+  (`regex` | `presidio` | `both`). Presidio adds NER + checksum recognizers; it
+  fails safe back to the regex layer when the `[pii]` extra isn't installed.
+
+### Changed
+- CI actions bumped to Node-24-compatible majors (checkout@v5, setup-python@v6,
+  artifact@v5) — clears the deprecation warning.
+- Added a `.pre-commit-config.yaml` mirroring the CI core job.
+
+### Notes
+- Test count 121 → **132** (+ server + PII-backend coverage).
+
 ## [0.4.0] — 2026-06-12
 
 Vector-similarity tier, self-hardening, AgentDojo adapter, and split CI.
@@ -128,6 +151,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.5.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.0
 [0.4.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.4.0
 [0.3.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.3.0
 [0.2.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.2.0

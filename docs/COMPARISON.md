@@ -141,10 +141,13 @@ rotation. None are blockers for an internal/self-hosted deployment.
 
 ## Shipped since the audit
 
+- ✅ **On PyPI** — `pip install shadowshield`, auto-published via OIDC Trusted Publishing.
 - ✅ **Vector-similarity self-hardening tier** (Rebuff layer 3) — `use_vectors=True`,
   `shield.harden()`. Bundled multilingual corpus; +1.7pp recall at 0% FPR.
 - ✅ **Multilingual signatures** (de/es/fr/it/pt) — +5pp recall on deepset, 0% FPR.
 - ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; ready to run.
+- ✅ **Presidio PII backend** — `pii` detector `backend="presidio"|"both"`, fail-safe to regex.
+- ✅ **FastAPI server + dashboard** — `shadowshield serve` (`[dashboard]` extra).
 
 ## Honest remaining gaps (roadmap)
 
@@ -153,6 +156,5 @@ rotation. None are blockers for an internal/self-hosted deployment.
   next milestone. *(highest priority)*
 - **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
   requires a HuggingFace license/login to benchmark.
-- **Presidio PII backend** is wired as an optional extra but the analyzer adapter
-  is not yet implemented (the regex PII layer ships today).
-- **FastAPI dashboard/server** (the `[dashboard]` extra) is reserved, not built.
+- **Richer attack corpus + tuned vector threshold** to push the vector tier's
+  contribution beyond the current conservative +1.7pp.
