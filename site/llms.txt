@@ -1,0 +1,33 @@
+# ShadowShield
+
+> Unified open-source, defense-in-depth security framework for LLM-powered apps and multi-agent AI systems, with a strong emphasis on prompt-injection defense (OWASP LLM01). It fuses detection (Sentinel heritage) and active response (ShadowClaw heritage) into one engine with a single API and config: signature matching (English + multilingual de/es/fr/it/pt), normalization-aware matching (zero-width/homoglyph/bidi), encoded-payload decoding, an optional DeBERTa classifier, an optional vector-similarity tier, canary tokens, agent-trace alignment auditing, tool-call guarding, and secret/PII output scanning. MIT licensed, `pip install shadowshield`.
+
+ShadowShield guards model **input** (user prompts, retrieved docs, tool results) and model **output** (secret/PII leaks, system-prompt regurgitation) with the same symmetric pipeline. It ships modes (`strict`/`balanced`/`permissive`), fail-closed `guard()` vs fail-soft `filter()` ergonomics, drop-in OpenAI/LangChain middleware, an async API, an HTTP server + dashboard, and a CLI. Benchmarks are honestly reported with false-positive rate alongside recall, and an external out-of-distribution number is published, not just an in-distribution one.
+
+## Key facts
+
+- License: MIT
+- Language: Python (>= 3.10)
+- Install: `pip install shadowshield`
+- Repository: https://github.com/0xsl1m/shadowshield
+- Package: https://pypi.org/project/shadowshield/
+- Core dependencies are deliberately small (pydantic, structlog, pyyaml, httpx, tiktoken); ML, vectors, Presidio PII, dataset loaders, and the dashboard are optional extras.
+- External benchmark (deepset/prompt-injections, test split, n=116): regex-only 18.3% recall, +multilingual signatures 23.3%, +vector similarity 25.0%, +DeBERTa classifier 48.3% — all at 0% false-positive rate and 100% precision.
+- Bundled offline benchmark is a 100%/0-FP regression baseline (smoke test), NOT a SOTA claim.
+
+## Documentation
+
+- [README](https://github.com/0xsl1m/shadowshield/blob/main/README.md): Full overview, quickstart, architecture, and integration examples.
+- [Benchmarks](https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md): Reproducible detection-rate and false-positive-rate measurements, bundled and external.
+- [Comparison](https://github.com/0xsl1m/shadowshield/blob/main/docs/COMPARISON.md): Competitive matrix vs LLM Guard, LlamaFirewall, NeMo Guardrails, Guardrails AI, and Rebuff.
+- [Security model](https://github.com/0xsl1m/shadowshield/blob/main/docs/security-model.md): Threat taxonomy, layers, and trust boundaries.
+- [Detectors](https://github.com/0xsl1m/shadowshield/blob/main/docs/detectors.md): Every built-in detector and what it catches.
+- [Configuration](https://github.com/0xsl1m/shadowshield/blob/main/docs/configuration.md): Modes, policy, weights, and YAML reference.
+- [Plugins](https://github.com/0xsl1m/shadowshield/blob/main/docs/plugins.md): Packaging custom detectors/responders.
+
+## Resources
+
+- [PyPI package](https://pypi.org/project/shadowshield/): Install and version history.
+- [Changelog](https://github.com/0xsl1m/shadowshield/blob/main/CHANGELOG.md): Release notes.
+- [Contributing](https://github.com/0xsl1m/shadowshield/blob/main/CONTRIBUTING.md): How to add attack patterns and tests.
+- [Full LLM context](https://shadowshield.xyz/llms-full.txt): Flattened, fuller content for ingestion.

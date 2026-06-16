@@ -1,0 +1,7 @@
+# ShadowShield — https://shadowshield.xyz/
+# Open-source security shield for agentic AI. Crawlers and AI agents welcome.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://shadowshield.xyz/sitemap.xml
