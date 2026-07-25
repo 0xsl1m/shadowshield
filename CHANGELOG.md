@@ -4,6 +4,47 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] — 2026-07-25
+
+Production hardening for failure recovery, durable state, release provenance,
+repository governance, and honest blind evaluation.
+
+### Security
+- Replaced the predictable durable-policy temporary filename with an exclusive
+  same-directory file, rejected final symlinks and non-regular state files, and
+  added descriptor/revision checks around reads, migrations, backups, and atomic
+  replacement. New POSIX state remains mode `0600`; existing POSIX modes are
+  preserved.
+- Removed inline event/style mutation from the site, enforced a hash-only CSP,
+  expanded browser feature denial, isolated the opener, and added a permanent
+  canonical `www`-to-apex redirect with static policy regression tests.
+- Enabled Dependabot vulnerability updates and extended CodeQL scanning, while
+  repository policy now rejects GitHub Actions that are not pinned by full SHA.
+
+### Stability
+- Coalesced concurrent failed Transformer and Vector initialization generations.
+  The original loader receives its original exception, every waiter receives a
+  fresh traceback-bounded exception, and a later request can retry safely.
+- Added 16-caller failure-wave regressions covering single-load publication,
+  unique exceptions, bounded tracebacks, readiness, and recovery, plus dedicated
+  regressions for exceptions that sabotage copying, construction, or stringification.
+
+### Supply chain and release safety
+- Release containers now carry signed SLSA provenance and a signed CycloneDX
+  SBOM in GHCR. The workflow reads both bundles back from OCI and constrains the
+  repository, workflow, hosted runner, and exact source commit before completing.
+- Python and container publication now accept only stable non-prerelease tags
+  whose package version, checkout SHA, `main` ancestry, and exact-SHA green CI run
+  all agree. The manual PyPI publication path was removed.
+- Added digest-pinned Actionlint as a CI gate and bounded privileged release jobs.
+
+### Evaluation
+- Added the independently authored, integrity-pinned 40-row blind v3 snapshot and
+  exposed `--generalization {v1,v2,v3,all}` (90 rows in `all`).
+- The unchanged core scores v3 at 6/6/14/14 (TP/FP/TN/FN) and all snapshots at
+  10/9/36/35. A frozen higher-recall candidate failed the predeclared FPR and
+  balanced-accuracy gates and was discarded in full; no holdout-driven tuning ships.
+
 ## [0.6.1] — 2026-07-25
 
 Production follow-through: concurrency correctness, key separation, honest
@@ -257,6 +298,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.6.2]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.2
 [0.6.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.1
 [0.6.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.0
 [0.5.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.1

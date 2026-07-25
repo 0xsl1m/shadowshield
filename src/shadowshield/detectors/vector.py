@@ -17,6 +17,7 @@ Requires the ``vectors`` extra: ``pip install shadowshield[vectors]``.
 
 from __future__ import annotations
 
+import copy
 import threading
 from importlib import resources
 from typing import Any
@@ -27,6 +28,41 @@ from .base import Detector, ScanContext
 # Multilingual by default so one corpus covers many languages (cross-lingual
 # embedding alignment). Override with any sentence-transformers model id.
 DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+
+def _fresh_exception(error: BaseException) -> BaseException:
+    """Clone a failure without sharing its mutable traceback between callers."""
+    fresh: BaseException | None = None
+    try:
+        fresh = copy.copy(error)
+    except BaseException:
+        try:
+            fresh = type(error)(*error.args)
+        except BaseException:
+            try:
+                fresh = RuntimeError(f"{type(error).__name__}: {error}")
+            except BaseException:
+                fresh = RuntimeError("index build failed")
+    if fresh is error or not isinstance(fresh, BaseException):
+        try:
+            fresh = RuntimeError(f"{type(error).__name__}: {error}")
+        except BaseException:
+            fresh = RuntimeError("index build failed")
+    try:
+        return fresh.with_traceback(None)
+    except BaseException:
+        return RuntimeError("index build failed")
+
+
+class _LoadAttempt:
+    """One index-build generation shared by every caller that encounters it."""
+
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+        self.done = threading.Event()
+        self.result: Any | None = None
+        self.error: BaseException | None = None
+        self.waiters = 0
 
 
 def _load_corpus() -> list[str]:
@@ -75,6 +111,9 @@ class VectorSimilarityDetector(Detector):
         self._model: Any = None
         self._corpus_emb: Any = None
         self._index_lock = threading.Lock()
+        self._load_condition = threading.Condition(self._index_lock)
+        self._load_generation = 0
+        self._load_attempt: _LoadAttempt | None = None
         self._ready = threading.Event()
         if not lazy:
             self._ensure_index()
@@ -82,9 +121,29 @@ class VectorSimilarityDetector(Detector):
     def _ensure_index(self) -> Any:
         if self._ready.is_set():
             return self._model
-        with self._index_lock:
+
+        with self._load_condition:
             if self._ready.is_set():
                 return self._model
+
+            attempt = self._load_attempt
+            if attempt is None:
+                self._load_generation += 1
+                attempt = _LoadAttempt(self._load_generation)
+                self._load_attempt = attempt
+                is_loader = True
+            else:
+                attempt.waiters += 1
+                self._load_condition.notify_all()
+                is_loader = False
+
+        if not is_loader:
+            attempt.done.wait()
+            if attempt.error is not None:
+                raise _fresh_exception(attempt.error)
+            return attempt.result
+
+        try:
             try:
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:  # pragma: no cover - optional dependency
@@ -100,9 +159,33 @@ class VectorSimilarityDetector(Detector):
             corpus_emb = model.encode(
                 list(self._corpus), normalize_embeddings=True, show_progress_bar=False
             )
+        except BaseException as exc:
+            prototype: BaseException = RuntimeError("index build failed")
+            try:
+                # Keep a traceback-free prototype. The loader re-raises ``exc``;
+                # each waiter clones the prototype so exception tracebacks cannot
+                # race or grow as the same object is raised across threads.
+                prototype = _fresh_exception(exc)
+            except BaseException:
+                # Exception subclasses can make copying, construction, or even
+                # stringification fail. They must never strand this generation.
+                pass
+            finally:
+                with self._load_condition:
+                    attempt.error = prototype
+                    self._load_attempt = None
+                    attempt.done.set()
+                    self._load_condition.notify_all()
+            raise
+
+        with self._load_condition:
             self._corpus_emb = corpus_emb
             self._model = model
+            attempt.result = model
+            self._load_attempt = None
             self._ready.set()
+            attempt.done.set()
+            self._load_condition.notify_all()
             return model
 
     def warmup(self) -> None:

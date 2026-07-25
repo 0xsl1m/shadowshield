@@ -97,6 +97,7 @@ _POLICY_STATE_PAYLOAD_KEYS = frozenset(
     }
 )
 _ACTIVE_POLICY_KEYS = frozenset({"bundle_id", "version", "issued_at", "applied_at"})
+_FileRevision = tuple[int, int, int, int, int, int, int]
 
 
 def _policy_state_mac_for_key(payload: dict[str, Any], key: bytes) -> str:
@@ -139,12 +140,168 @@ def _encode_policy_state(payload: dict[str, Any], key: bytes) -> bytes:
     return encoded
 
 
-def _read_policy_state(path: Path) -> bytes:
-    with path.open("rb") as state_file:
-        encoded = state_file.read(_MAX_POLICY_STATE_BYTES + 1)
+def _file_revision(metadata: os.stat_result) -> _FileRevision:
+    """Return the stable fields used to detect a replaced or rewritten file."""
+
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        # Windows reports incompatible creation/change-time values between
+        # path and descriptor stat calls. POSIX ctime is stable across those
+        # views and catches a same-size rewrite even if mtime is restored.
+        0 if os.name == "nt" else metadata.st_ctime_ns,
+        metadata.st_nlink,
+        stat.S_IMODE(metadata.st_mode),
+    )
+
+
+def _normalize_operator_file_path(path: str | Path) -> Path:
+    """Normalize an operator-selected file while preserving its chosen location.
+
+    Only the parent is resolved so a final symbolic-link entry remains visible to
+    the no-follow checks below instead of silently redirecting the state file.
+    """
+
+    candidate = Path(path)
+    if not candidate.name:
+        raise ValueError("policy state path must name a file")
+    # Deployment configuration intentionally permits arbitrary locations. Resolve
+    # traversal and parent links once so later operations use one stable location.
+    # codeql[py/path-injection]
+    return candidate.parent.resolve(strict=False) / candidate.name
+
+
+def _lstat_policy_state(path: Path, *, missing_ok: bool = False) -> os.stat_result | None:
+    """Inspect a configured state path without following its final component."""
+
+    try:
+        # This is an intentional local-operator path, not an HTTP/API value. The
+        # no-follow and identity checks around every subsequent access are the
+        # applicable validation when arbitrary deployment paths must be supported.
+        # codeql[py/path-injection]
+        metadata = path.lstat()
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
+    if stat.S_ISLNK(metadata.st_mode):
+        raise ValueError("policy state path must not be a symbolic link")
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("policy state path must be a regular file")
+    return metadata
+
+
+def _assert_file_revision(path: Path, expected: os.stat_result | None) -> None:
+    """Fail if *path* appeared, disappeared, or changed since inspection."""
+
+    current = _lstat_policy_state(path, missing_ok=True)
+    if expected is None:
+        if current is not None:
+            raise RuntimeError("policy state path appeared during the operation")
+        return
+    if current is None or _file_revision(current) != _file_revision(expected):
+        raise RuntimeError("policy state changed during the operation")
+
+
+def _path_entry_exists(path: Path) -> bool:
+    """Return whether any entry, including a broken symlink, occupies *path*."""
+
+    try:
+        # Backup destinations are also explicit local-operator paths.
+        # codeql[py/path-injection]
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _read_policy_state(
+    path: Path,
+    *,
+    missing_ok: bool = False,
+    expected: os.stat_result | None = None,
+) -> tuple[bytes, os.stat_result] | None:
+    """Read a bounded, regular state file without following a final symlink."""
+
+    before = _lstat_policy_state(path, missing_ok=missing_ok)
+    if before is None:
+        return None
+    if expected is not None and _file_revision(before) != _file_revision(expected):
+        raise RuntimeError("policy state changed during the operation")
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    file_descriptor = -1
+    try:
+        # The path is deliberately selected by the local operator. O_NOFOLLOW
+        # (where available), lstat/fstat identity checks, and a regular-file
+        # requirement prevent a configured link or swap from becoming a sink.
+        # codeql[py/path-injection]
+        file_descriptor = os.open(path, flags)
+        opened_before = os.fstat(file_descriptor)
+        if not stat.S_ISREG(opened_before.st_mode):
+            raise ValueError("policy state path must be a regular file")
+        if _file_revision(opened_before) != _file_revision(before):
+            raise RuntimeError("policy state changed while it was being opened")
+
+        state_file = os.fdopen(file_descriptor, "rb")
+        file_descriptor = -1
+        with state_file:
+            encoded = state_file.read(_MAX_POLICY_STATE_BYTES + 1)
+            opened_after = os.fstat(state_file.fileno())
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+
+    if _file_revision(opened_after) != _file_revision(opened_before):
+        raise RuntimeError("policy state changed while it was being read")
     if len(encoded) > _MAX_POLICY_STATE_BYTES:
         raise ValueError(f"policy state exceeds {_MAX_POLICY_STATE_BYTES} byte limit")
-    return encoded
+    return encoded, opened_after
+
+
+def _write_policy_state_temporary(
+    path: Path,
+    encoded: bytes,
+    *,
+    mode: int,
+) -> tuple[Path, os.stat_result]:
+    """Create and sync an exclusive same-directory temporary state file."""
+
+    temporary_path: Path | None = None
+    file_descriptor = -1
+    try:
+        # `path.name` cannot add a directory component. The directory itself is
+        # the operator-selected state directory, so the final replace stays atomic.
+        # codeql[py/path-injection]
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.tmp-",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+        temporary_file = os.fdopen(file_descriptor, "wb")
+        file_descriptor = -1
+        with temporary_file:
+            temporary_file.write(encoded)
+            temporary_file.flush()
+            if os.chmod in os.supports_fd:
+                os.chmod(temporary_file.fileno(), mode)
+            os.fsync(temporary_file.fileno())
+            metadata = os.fstat(temporary_file.fileno())
+            if metadata.st_nlink != 1:
+                raise RuntimeError("temporary policy state acquired an unexpected hard link")
+        return temporary_path, metadata
+    except Exception:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _parse_policy_state_envelope(encoded: bytes) -> tuple[Any, str]:
@@ -237,7 +394,9 @@ class ShieldState:
         self._lat_sum_ms = 0.0
         self.floor = ProtectionFloor()
         self.active_policy: dict[str, Any] | None = None
-        self._policy_state_path = Path(policy_state_path) if policy_state_path else None
+        self._policy_state_path = (
+            _normalize_operator_file_path(policy_state_path) if policy_state_path else None
+        )
         self._policy_state_auth_key = policy_state_auth_key
         if self._policy_state_path is not None and self._policy_state_auth_key is None:
             raise RuntimeError("durable policy state requires an authentication key")
@@ -343,10 +502,13 @@ class ShieldState:
 
     def _load_policy_state(self) -> None:
         path = self._policy_state_path
-        if path is None or not path.exists():
+        if path is None:
             return
         try:
-            encoded_state = _read_policy_state(path)
+            state_snapshot = _read_policy_state(path, missing_ok=True)
+            if state_snapshot is None:
+                return
+            encoded_state, _ = state_snapshot
             raw_payload, state_mac = _parse_policy_state_envelope(encoded_state)
             payload = self._validate_policy_state_payload(raw_payload)
             expected_mac = self._policy_state_mac(payload)
@@ -379,7 +541,7 @@ class ShieldState:
         }
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name(f".{path.name}.tmp")
+            temporary: Path | None = None
             payload = {
                 "highest_version": bundle.version,
                 "bundle_ids": next_ids,
@@ -392,14 +554,24 @@ class ShieldState:
                 if key is None:  # Constructor enforces this whenever state is configured.
                     raise RuntimeError("durable policy state requires an authentication key")
                 encoded_state = _encode_policy_state(payload, key)
-                with temporary.open("wb") as state_file:
-                    state_file.write(encoded_state)
-                    state_file.flush()
-                    os.fsync(state_file.fileno())
+                previous = _lstat_policy_state(path, missing_ok=True)
+                target_mode = stat.S_IMODE(previous.st_mode) if previous is not None else 0o600
+                temporary, temporary_metadata = _write_policy_state_temporary(
+                    path,
+                    encoded_state,
+                    mode=target_mode,
+                )
+                _assert_file_revision(path, previous)
+                _assert_file_revision(temporary, temporary_metadata)
+                # The destination is an explicit operator-selected state file.
+                # `temporary` is an exclusive same-directory regular file.
+                # codeql[py/path-injection]
                 os.replace(temporary, path)
+                temporary = None
                 _fsync_parent(path)
             except Exception as exc:
-                temporary.unlink(missing_ok=True)
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
                 raise PolicyRejected(f"cannot persist policy replay state: {exc}") from exc
         self._highest_policy_version = bundle.version
         self._seen_policy_bundle_ids = set(next_ids)
@@ -723,12 +895,14 @@ def migrate_policy_state(
     Run this only while every process using the state file is stopped.
     """
 
-    state_path = Path(path)
-    backup = (
+    state_argument = Path(path)
+    backup_argument = (
         Path(backup_path)
         if backup_path is not None
-        else state_path.with_name(f"{state_path.name}.pre-0.6.1.bak")
+        else state_argument.with_name(f"{state_argument.name}.pre-0.6.1.bak")
     )
+    state_path = _normalize_operator_file_path(state_argument)
+    backup = _normalize_operator_file_path(backup_argument)
     old_key_bytes = old_key.encode("utf-8") if isinstance(old_key, str) else old_key
     new_key_bytes = new_key.encode("utf-8") if isinstance(new_key, str) else new_key
     if not old_key_bytes:
@@ -739,13 +913,15 @@ def migrate_policy_state(
         )
     if hmac.compare_digest(old_key_bytes, new_key_bytes):
         raise ValueError("new policy-state key must be independent from the old key")
-    if state_path.resolve() == backup.resolve():
+    if os.path.normcase(os.fspath(state_path)) == os.path.normcase(os.fspath(backup)):
         raise ValueError("backup path must differ from the policy-state path")
-    if backup.exists():
+    if _path_entry_exists(backup):
         raise FileExistsError(f"refusing to overwrite existing backup {backup}")
 
     try:
-        encoded_source = _read_policy_state(state_path)
+        source_snapshot = _read_policy_state(state_path)
+        assert source_snapshot is not None
+        encoded_source, source_metadata = source_snapshot
         raw_payload, state_mac = _parse_policy_state_envelope(encoded_source)
         payload = ShieldState._validate_policy_state_payload(raw_payload)
         expected_mac = _policy_state_mac_for_key(payload, old_key_bytes)
@@ -759,29 +935,35 @@ def migrate_policy_state(
             policy_state_auth_key=old_key_bytes,
         )
         encoded_replacement = _encode_policy_state(payload, new_key_bytes)
-        source_mode = stat.S_IMODE(state_path.stat().st_mode)
+        source_mode = stat.S_IMODE(source_metadata.st_mode)
     except Exception as exc:
         raise RuntimeError(f"cannot verify policy state {state_path}: {exc}") from exc
 
-    temporary_name: str | None = None
+    temporary: Path | None = None
     try:
-        temporary_fd, temporary_name = tempfile.mkstemp(
-            prefix=f".{state_path.name}.migrate-",
-            dir=state_path.parent,
+        temporary, temporary_metadata = _write_policy_state_temporary(
+            state_path,
+            encoded_replacement,
+            mode=source_mode,
         )
-        with os.fdopen(temporary_fd, "wb") as temporary_file:
-            temporary_file.write(encoded_replacement)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.chmod(temporary_name, source_mode)
 
         # Detect an online writer or other change after verification.
-        if _read_policy_state(state_path) != encoded_source:
+        current_snapshot = _read_policy_state(state_path, expected=source_metadata)
+        assert current_snapshot is not None
+        if current_snapshot[0] != encoded_source:
             raise RuntimeError("policy state changed during migration; stop all writers and retry")
+        _assert_file_revision(temporary, temporary_metadata)
 
+        backup_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        backup_flags |= getattr(os, "O_BINARY", 0)
+        backup_flags |= getattr(os, "O_CLOEXEC", 0)
+        backup_flags |= getattr(os, "O_NOFOLLOW", 0)
+        # The backup destination is intentionally selected by the local operator.
+        # O_EXCL refuses every pre-existing entry, including symbolic links.
+        # codeql[py/path-injection]
         backup_fd = os.open(
             backup,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            backup_flags,
             source_mode,
         )
         with os.fdopen(backup_fd, "wb") as backup_file:
@@ -790,18 +972,23 @@ def migrate_policy_state(
             os.fsync(backup_file.fileno())
         _fsync_parent(backup)
 
-        os.replace(temporary_name, state_path)
-        temporary_name = None
+        _assert_file_revision(state_path, source_metadata)
+        _assert_file_revision(temporary, temporary_metadata)
+        # Both paths are local-operator destinations; the temporary source is an
+        # exclusive regular sibling and the destination revision was rechecked.
+        # codeql[py/path-injection]
+        os.replace(temporary, state_path)
+        temporary = None
         _fsync_parent(state_path)
     except Exception as exc:
-        if temporary_name is not None:
-            Path(temporary_name).unlink(missing_ok=True)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
         raise RuntimeError(
             f"cannot migrate policy state {state_path}: {exc}; "
             f"the original or backup at {backup} remains recoverable"
         ) from exc
 
-    return backup
+    return backup_argument
 
 
 # --------------------------------------------------------------------------- #

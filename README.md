@@ -76,8 +76,9 @@ print(result.safe_text)            # safe fallback message
 > in-distribution **regression baseline, not a SOTA claim**. We publish the humbling
 > external numbers on purpose — a credible security tool shows its homework.
 > The frozen blind semantic snapshots are harder still: v1 reaches 26.7% recall /
-> 13.3% FPR and v2 reaches 0% / 10%. Run
-> `shadowshield benchmark --generalization v2`; these gaps are public by design.
+> 13.3% FPR, v2 reaches 0% / 10%, and v3 reaches 30% / 30%; the 90-row aggregate
+> is 22.2% / 20%. Run `shadowshield benchmark --generalization all`; these gaps
+> are public by design.
 
 ---
 
@@ -222,7 +223,7 @@ shadowshield detectors          # list registered detectors
 shadowshield init > shield.yaml # write an annotated default config
 shadowshield benchmark          # run the bundled offline benchmark
 shadowshield benchmark --adversarial
-shadowshield benchmark --generalization v2  # frozen blind semantic snapshot
+shadowshield benchmark --generalization all # all frozen blind semantic snapshots
 shadowshield serve              # HTTP server + live dashboard (needs [dashboard])
 ```
 
@@ -256,15 +257,18 @@ export SHADOWSHIELD_ADMIN_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.1/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
 docker compose pull
 docker compose up -d
 ```
 
-The release workflow scans that exact image, publishes it to GHCR, and attaches
-its digest plus CycloneDX SBOM to the matching GitHub Release. All four secrets
-must be independent. Terminate TLS at a trusted ingress before exposing it beyond
-localhost. See the
+The release workflow scans that exact image, publishes it to GHCR, signs SLSA
+provenance plus the CycloneDX SBOM with ephemeral GitHub OIDC/Sigstore identity,
+verifies the registry-attached source/workflow claims and an anonymous digest
+pull, and attaches the digest plus SBOM to the matching GitHub Release. Stable
+release tags are accepted only from an exact green `main` commit. All four
+secrets must be independent. Terminate TLS at a trusted ingress before exposing
+it beyond localhost. See the
 [production-readiness roadmap](docs/PRODUCTION_READINESS.md) for launch gates,
 known scale limits, and the operator checklist.
 
@@ -274,14 +278,14 @@ Upgrading a control-plane volume from 0.6.0 requires an offline re-key because
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.1/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 # Stop every writer and snapshot the volume before running the migration.
 docker compose stop shadowshield
 docker compose run --rm --no-deps shadowshield \
   shadowshield migrate-policy-state --path /var/lib/shadowshield/policy-state.json
-# Preserve the reported .pre-0.6.1.bak file, then start 0.6.1.
+# Preserve the reported .pre-0.6.1.bak file, then start 0.6.2.
 docker compose up -d
 ```
 
@@ -533,7 +537,7 @@ shadowshield serve --control --api-key SECRET      # require X-API-Key / Bearer 
 shadowshield schema      # config JSON Schema (editor/CI validation)
 shadowshield owasp       # OWASP LLM Top 10 (2025) coverage map
 shadowshield benchmark --adversarial       # curated regression set
-shadowshield benchmark --generalization v2 # frozen blind semantic snapshot
+shadowshield benchmark --generalization all # all frozen blind semantic snapshots
 ```
 
 ## Documentation

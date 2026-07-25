@@ -8,9 +8,10 @@ this specific GitHub workflow directly. The pipeline is
 The same GitHub Release also triggers
 [`container-release.yml`](../.github/workflows/container-release.yml). It builds
 one image from the release tag, generates a CycloneDX SBOM, rejects fixable
-high/critical findings, pushes that exact scanned image to GHCR, verifies an
-anonymous pull by digest, and attaches `container-digest.txt` plus the SBOM to
-the GitHub Release.
+high/critical findings, pushes that exact scanned image to GHCR, signs SLSA
+provenance and CycloneDX attestations through GitHub's Sigstore-backed OIDC
+service, verifies the signed provenance and an anonymous pull by digest, and
+attaches `container-digest.txt` plus the SBOM to the GitHub Release.
 
 ## One-time setup (PyPI account owner only)
 
@@ -62,13 +63,10 @@ Do not create the release while required checks are pending. A partial release
 is recoverable by fixing the failed workflow and re-running it, but the PyPI
 version itself cannot be replaced.
 
-To publish the **current** Python version without a new release (for example, the
-first publish of an already-tagged version), trigger only the PyPI workflow:
-
-```bash
-gh workflow run publish.yml --ref main
-gh run watch        # follow it
-```
+Both publication workflows independently reject non-stable tags, tag/source
+version mismatches, commits outside `main`, and commits without a successful
+exact-SHA `main` CI run. There is no manual-dispatch publication path; use
+GitHub's **Re-run failed jobs** control to recover a failed release workflow.
 
 ## Verify
 
@@ -79,7 +77,22 @@ python -c "import shadowshield as ss; print(ss.__version__)"
 
 gh release download vX.Y.Z \
   --pattern container-digest.txt --pattern shadowshield-sbom.cdx.json
-docker pull "ghcr.io/0xsl1m/shadowshield@$(cat container-digest.txt)"
+digest="$(cat container-digest.txt)"
+image="ghcr.io/0xsl1m/shadowshield@$digest"
+docker pull "$image"
+gh attestation verify "oci://$image" \
+  --repo 0xsl1m/shadowshield \
+  --bundle-from-oci \
+  --signer-workflow 0xsl1m/shadowshield/.github/workflows/container-release.yml \
+  --source-digest "$(git rev-list -n 1 vX.Y.Z)" \
+  --deny-self-hosted-runners
+gh attestation verify "oci://$image" \
+  --repo 0xsl1m/shadowshield \
+  --bundle-from-oci \
+  --predicate-type https://cyclonedx.org/bom \
+  --signer-workflow 0xsl1m/shadowshield/.github/workflows/container-release.yml \
+  --source-digest "$(git rev-list -n 1 vX.Y.Z)" \
+  --deny-self-hosted-runners
 ```
 
 ## Notes

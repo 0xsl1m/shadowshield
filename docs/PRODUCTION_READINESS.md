@@ -1,6 +1,6 @@
 # Production readiness roadmap
 
-**Baseline:** ShadowShield 0.6.1 · **Audit date:** 2026-07-25
+**Baseline:** ShadowShield 0.6.2 · **Audit date:** 2026-07-25
 
 This roadmap is the release gate for the Python library and the optional HTTP
 control plane. A checked item is implemented and locally verified; unchecked
@@ -10,12 +10,12 @@ items require an explicit operator or maintainer decision before public launch.
 
 | Area | State | Evidence / remaining action |
 |---|---|---|
-| Correctness | Ready | Full unit/integration suite; strict mypy; Ruff lint and format |
+| Correctness | Ready | 290+ unit/integration cases; strict mypy; Ruff lint/format; CodeQL extended scanning |
 | Packaging | Ready | Isolated sdist/wheel build, Twine metadata check, installed-wheel CI smoke test |
 | Runtime security | Ready with configuration | Early API-key/Bearer auth, body limits, restricted CORS, immutable protection floor, non-root read-only container |
-| Supply chain | Ready | Digest-pinned base, SHA-pinned Actions, PyPI OIDC, pre-push image vulnerability gate, anonymously verified GHCR digest, release-attached CycloneDX SBOM |
+| Supply chain | Ready | Repository-enforced Action SHA pins, PyPI OIDC, exact-green-main release gates, pre-push image vulnerability gate, anonymous GHCR digest pull, registry-verified SLSA and CycloneDX attestations |
 | Observability | Ready for single process | Content-free telemetry, Prometheus endpoint, bounded in-memory event feed |
-| Detection quality | Beta | Curated adversarial: 100%/0% FPR; blind v1: 26.7%/13.3%; blind v2: 0%/10%; deepset core: 23.3%/0% |
+| Detection quality | Beta | Curated adversarial: 100%/0% FPR; blind v1–v3 aggregate: 22.2%/20%; v3: 30%/30%; deepset core: 23.3%/0% |
 | Scale / HA | Not yet | Counters, events, configuration, and rate limits are process-local |
 | Streaming | Not yet | Outputs must be buffered before scanning |
 
@@ -48,6 +48,19 @@ items require an explicit operator or maintainer decision before public launch.
 - [x] Pin the base image by digest, gate the exact release image on Trivy, publish
   it to GHCR, verify an anonymous digest pull, and attach its immutable digest
   plus CycloneDX SBOM to the release.
+- [x] Sign release-image SLSA provenance and the CycloneDX SBOM with ephemeral
+  GitHub OIDC/Sigstore identity, then verify repository, workflow, runner, and
+  source-commit claims from the OCI registry before completing the release.
+- [x] Reject release publication unless a stable, non-prerelease tag matches the
+  package version, resolves to `main`, and has a successful exact-SHA `main` CI run.
+- [x] Reject symlink/non-regular durable policy-state files, use unpredictable
+  exclusive temporary files, and revision-check reads, migrations, and replaces.
+- [x] Coalesce concurrent failed Transformer/Vector load generations while giving
+  every waiter a fresh bounded exception traceback and allowing a later retry.
+- [x] Enable Dependabot security updates, extended CodeQL scanning, secret
+  push-protection, and repository-level enforcement of full-SHA Action pins.
+- [x] Publish a third independently authored blind snapshot and reject—not
+  tune—the first frozen candidate when it missed the predeclared FPR/accuracy bar.
 
 ## P1 — launch procedure (operator-owned)
 
@@ -70,11 +83,13 @@ items require an explicit operator or maintainer decision before public launch.
 
 1. Add a rolling-window streaming scanner that blocks before unsafe output is emitted.
 2. Move rate limits, event history, and metrics aggregation to shared external stores for multi-worker HA.
-3. Publish signed container images and provenance attestations from the release workflow.
-4. Calibrate detector scores on a larger independently sourced corpus and publish confidence intervals.
-5. Add multi-hour soak and network fault-injection tests for reporters, judges, and hot policy updates.
-6. Split the current administrator credential into narrower observe and mutation scopes.
-7. Design cross-process model/index coordination and durable Reporter spooling.
+3. Build a fresh independently sourced development corpus, then evaluate the
+   next detector candidate once on a new sealed snapshot and publish confidence intervals.
+4. Add multi-hour soak and network fault-injection tests for reporters, judges, and hot policy updates.
+5. Split the current administrator credential into narrower observe and mutation scopes.
+6. Design cross-process model/index coordination and durable Reporter spooling.
+7. Split unprivileged container build/scan from the write/OIDC publication job.
+8. Refactor release evidence into a draft-first pipeline, then enable immutable releases.
 
 ## Go / no-go gates
 
