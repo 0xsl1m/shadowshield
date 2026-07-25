@@ -1107,12 +1107,6 @@ def serve_control(
     Existing state authenticated by the signing key must be deliberately
     reinitialized or migrated before configuring an independent state key.
     """
-    try:
-        import uvicorn
-    except ImportError as exc:
-        raise ImportError(
-            "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
-        ) from exc
     keys = resolve_api_keys(api_keys)
     admins = resolve_admin_keys(admin_keys)
     loopback = is_loopback(host)
@@ -1148,6 +1142,12 @@ def serve_control(
         raise RuntimeError(
             f"policy state authentication key must be at least {_MIN_POLICY_STATE_KEY_BYTES} bytes"
         )
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise ImportError(
+            "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
+        ) from exc
     uvicorn.run(
         create_control_app(
             mode,
