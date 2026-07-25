@@ -38,6 +38,8 @@ from .session import ConversationHistory, ShieldedSession
 from .types import Direction, ScanResult, ThreatBlockedError
 
 F = TypeVar("F", bound=Callable[..., Any])
+MAX_READINESS_DETECTORS = 32
+MAX_READINESS_NAME_CHARS = 64
 
 
 class Shield:
@@ -118,6 +120,28 @@ class Shield:
     @property
     def detectors(self) -> list[Detector]:
         return list(self._detectors)
+
+    def warmup(self) -> None:
+        """Initialize every detector, propagating failures for fail-fast startup."""
+        for detector in self._detectors:
+            detector.warmup()
+
+    def readiness(self) -> dict[str, Any]:
+        """Return a bounded readiness summary without loading detector resources."""
+        not_ready: list[str] = []
+        all_ready = True
+        for detector in self._detectors:
+            try:
+                ready = detector.is_ready()
+            except Exception:
+                ready = False
+            if ready:
+                continue
+            all_ready = False
+            if len(not_ready) < MAX_READINESS_DETECTORS:
+                name = str(detector.name)[:MAX_READINESS_NAME_CHARS]
+                not_ready.append(name)
+        return {"ready": all_ready, "not_ready": not_ready}
 
     def add_result_observer(
         self, callback: Callable[[ScanResult, float, str | None], None]

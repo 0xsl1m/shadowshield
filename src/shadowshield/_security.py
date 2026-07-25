@@ -15,6 +15,7 @@ Configuration precedence: explicit arguments first, then environment:
 - ``SHADOWSHIELD_ADMIN_KEY``   - comma-separated control/metrics administrator keys.
 - ``SHADOWSHIELD_CORS_ORIGINS`` - comma-separated list of allowed origins.
 - ``SHADOWSHIELD_POLICY_KEY``  - HMAC key required for remotely exposed policy updates.
+- ``SHADOWSHIELD_POLICY_STATE_KEY`` - independent HMAC key for durable policy state.
 - ``SHADOWSHIELD_POLICY_STATE_PATH`` - durable anti-replay state file.
 
 Keys are compared with :func:`hmac.compare_digest` (constant-time) at request time.
@@ -26,6 +27,7 @@ import asyncio
 import hmac
 import json
 import os
+from collections.abc import Sequence
 from typing import Any
 
 MAX_HTTP_BODY_BYTES = 1_048_576
@@ -75,9 +77,38 @@ def resolve_policy_key(explicit: bytes | str | None = None) -> bytes | None:
     return value
 
 
+def resolve_policy_state_key(explicit: bytes | str | None = None) -> bytes | None:
+    """Policy-state HMAC key from args or ``SHADOWSHIELD_POLICY_STATE_KEY``."""
+    value: bytes | str | None = explicit or os.environ.get("SHADOWSHIELD_POLICY_STATE_KEY")
+    if isinstance(value, str):
+        return value.encode("utf-8") if value else None
+    return value
+
+
 def resolve_policy_state_path(explicit: str | None = None) -> str | None:
     """Durable anti-replay state path from args or the deployment environment."""
     return explicit or os.environ.get("SHADOWSHIELD_POLICY_STATE_PATH") or None
+
+
+def secret_groups_overlap(
+    left: Sequence[bytes | str],
+    right: Sequence[bytes | str],
+) -> bool:
+    """Return whether two credential groups share a value.
+
+    Every candidate comparison uses :func:`hmac.compare_digest`; the loops do
+    not short-circuit when a match is found.
+    """
+
+    overlap = False
+    for left_value in left:
+        left_bytes = left_value.encode("utf-8") if isinstance(left_value, str) else left_value
+        for right_value in right:
+            right_bytes = (
+                right_value.encode("utf-8") if isinstance(right_value, str) else right_value
+            )
+            overlap |= hmac.compare_digest(left_bytes, right_bytes)
+    return overlap
 
 
 def extract_key(x_api_key: str | None, authorization: str | None) -> str | None:

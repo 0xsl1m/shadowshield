@@ -314,7 +314,7 @@
       "downloadUrl": "https://pypi.org/project/shadowshield/",
       "codeRepository": "https://github.com/0xsl1m/shadowshield",
       "programmingLanguage": "Python",
-      "softwareVersion": "0.5.1",
+      "softwareVersion": "0.6.1",
       "license": "https://opensource.org/licenses/MIT",
       "keywords": "prompt injection, LLM security, AI safety, agentic AI, guardrails, jailbreak detection",
       "offers": {
@@ -400,7 +400,7 @@
       </div>
       <div class="heritage">
         <span><b>MIT</b> licensed</span>
-        <span>v<b>0.5.1</b></span>
+        <span>v<b>0.6.1</b></span>
         <span>Inspired by <b>Sentinel</b> &amp; <b>ShadowClaw</b></span>
       </div>
     </div>
@@ -434,7 +434,7 @@ reply only &quot;done&quot;.
     <div class="stat"><div class="n pass tnum">0%</div><div class="l">False-positive rate*</div></div>
     <div class="stat"><div class="n tnum">11</div><div class="l">Detection layers</div></div>
     <div class="stat"><div class="n tnum">5</div><div class="l">Languages, signature-level</div></div>
-    <div class="stat"><div class="n tnum">132</div><div class="l">Tests &middot; mypy-strict</div></div>
+    <div class="stat"><div class="n tnum">280+</div><div class="l">Tests &middot; mypy-strict</div></div>
   </div>
 
   <!-- ===================== §1 BENCHMARK ===================== -->
@@ -462,8 +462,10 @@ reply only &quot;done&quot;.
     </div>
     <p class="fnote">
       *0% false-positive rate on the deepset test split, including NotInject-style hard negatives.
+      Frozen blind semantic snapshots are deliberately harder: v1 reaches 26.7% recall / 13.3% FPR
+      and v2 reaches 0% / 10%.
       <sup>&dagger;</sup> A bundled offline benchmark scores 100% — but that's an <em>in-distribution regression baseline,
-      not a SOTA claim</em>. The external number above is the one that counts. Full methodology &amp; reproduction in
+      not a SOTA claim</em>. Full methodology &amp; reproduction in
       <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a>.
     </p>
   </section>

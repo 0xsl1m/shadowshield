@@ -105,6 +105,19 @@ class Detector(abc.ABC):
     def applies_to(self, direction: Direction) -> bool:
         return direction in self.directions
 
+    def warmup(self) -> None:
+        """Initialize optional resources needed before this detector is ready.
+
+        Deterministic detectors need no preparation. Detectors with lazy model
+        or index loading override this method; failures intentionally propagate
+        so callers can fail startup rather than accept traffic partially ready.
+        """
+        return None
+
+    def is_ready(self) -> bool:
+        """Return readiness without performing I/O or loading resources."""
+        return True
+
     @abc.abstractmethod
     def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
         """Return zero or more :class:`Threat` findings for ``text``.

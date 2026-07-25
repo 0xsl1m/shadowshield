@@ -130,6 +130,29 @@ jobs:
           persist-credentials: false
       - name: Build image
         run: docker build --tag shadowshield-ci:${{ github.sha }} .
+      - name: Generate CycloneDX image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: shadowshield-ci:${{ github.sha }}
+          format: cyclonedx
+          output: shadowshield-sbom.cdx.json
+          exit-code: "0"
+      - name: Upload image SBOM
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: container-sbom
+          path: shadowshield-sbom.cdx.json
+          retention-days: 30
+      - name: Reject fixable high or critical image vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: shadowshield-ci:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          skip-setup-trivy: true
       - name: Verify fail-closed startup and hardened runtime
         shell: bash
         run: |
@@ -165,6 +188,7 @@ jobs:
             -e SHADOWSHIELD_ADMIN_KEY=ci-admin-key \
             -e SHADOWSHIELD_POLICY_KEY=ci-policy-key \
             -e SHADOWSHIELD_POLICY_STATE_PATH=/tmp/policy-state.json \
+            -e SHADOWSHIELD_POLICY_STATE_KEY=ci-policy-state-key-0123456789abcdef \
             -p 127.0.0.1:18080:8000 "$image"
 
           for _ in $(seq 1 30); do
@@ -172,6 +196,7 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:18080/health | grep '"status":"ok"'
+          curl --fail --silent http://127.0.0.1:18080/ready | grep '"ready":true'
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
             -H 'content-type: application/json' \
             -d '{"text":"malformed"' http://127.0.0.1:18080/scan)" = "401"

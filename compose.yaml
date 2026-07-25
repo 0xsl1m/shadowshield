@@ -1,11 +1,11 @@
 services:
   shadowshield:
-    build:
-      context: .
+    image: ghcr.io/0xsl1m/shadowshield@${SHADOWSHIELD_IMAGE_DIGEST:?Set SHADOWSHIELD_IMAGE_DIGEST to the release sha256 digest}
     environment:
       SHADOWSHIELD_API_KEY: ${SHADOWSHIELD_API_KEY:?Set SHADOWSHIELD_API_KEY before starting}
       SHADOWSHIELD_ADMIN_KEY: ${SHADOWSHIELD_ADMIN_KEY:?Set SHADOWSHIELD_ADMIN_KEY before starting}
       SHADOWSHIELD_POLICY_KEY: ${SHADOWSHIELD_POLICY_KEY:?Set SHADOWSHIELD_POLICY_KEY before starting}
+      SHADOWSHIELD_POLICY_STATE_KEY: ${SHADOWSHIELD_POLICY_STATE_KEY:?Set an independent 32-byte SHADOWSHIELD_POLICY_STATE_KEY before starting}
       SHADOWSHIELD_POLICY_STATE_PATH: /var/lib/shadowshield/policy-state.json
       SHADOWSHIELD_CORS_ORIGINS: ${SHADOWSHIELD_CORS_ORIGINS:-}
     ports:

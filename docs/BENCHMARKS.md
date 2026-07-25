@@ -10,6 +10,11 @@ one** — a guard that blocks everything has perfect recall and is useless.
 ```bash
 # Bundled offline benchmark (no network, no extra deps)
 shadowshield benchmark
+shadowshield benchmark --adversarial
+
+# Independently authored blind semantic snapshots
+shadowshield benchmark --generalization v1
+shadowshield benchmark --generalization v2
 
 # External public dataset (needs the datasets extra)
 pip install "shadowshield[datasets]"
@@ -30,9 +35,44 @@ negatives). `balanced` mode:
 
 **This is a regression baseline and a smoke test — NOT a claim of real-world
 accuracy.** 100% on our own set just means we don't regress on the attack
-catalogue we curated. The number that matters is the external one below.
+catalogue we curated. The blind and external numbers below are the real constraint.
 
-## 2. External: `deepset/prompt-injections` (out-of-distribution — the honest number)
+## 2. Curated adversarial regression set
+
+The 36-row adversarial catalogue includes obfuscation, multilingual and indirect
+attacks, plus benign trigger-heavy counterexamples. It improved from
+15/2/16/3 to 18/0/18/0 (TP/FP/TN/FN):
+
+| recall | FPR | precision | F1 |
+|---:|---:|---:|---:|
+| 100% | 0% | 100% | 100% |
+
+This is still a curated regression set. The signatures were developed with these
+cases visible, so its perfect score is not a generalization claim.
+
+## 3. Blind semantic snapshots (the anti-gaming result)
+
+Two balanced snapshots were authored independently without detector or regex
+context, then frozen. They deliberately pair attacks with benign text containing
+similar roleplay, authority, debug, and policy vocabulary.
+
+Isolation protocol: the authoring task received only the five semantic category
+names, required row/balance counts, and a request for attack/benign contrast
+pairs. It did not receive detector source, signatures, or current predictions.
+The files were frozen before detector tuning and are integrity-pinned in tests:
+v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
+v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`.
+
+| snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
+|---|---:|---:|---:|---:|---:|
+| v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
+| v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
+
+The narrow 0.6.1 fixes intentionally leave these results unchanged. They expose
+the core deterministic tier's semantic-generalization ceiling and are development
+evidence for the next classifier/conjunction tranche, not a number to hide.
+
+## 4. External: `deepset/prompt-injections` (out-of-distribution)
 
 The field's standard public smoke set (662 rows, English + German, diverse
 phrasings). This is where in-distribution scores collapse — and ours do too.
@@ -72,7 +112,7 @@ via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`. Note: the Prompt-Gu
 models are **gated** on HuggingFace — accept the license and run `huggingface-cli
 login` (or set `HF_TOKEN`) first. The default ProtectAI model needs no token.
 
-## 3. Interpretation & roadmap
+## 5. Interpretation & roadmap
 
 - **Use the deterministic tiers** for cheap, explainable, obfuscation-aware,
   zero-false-positive catches and for everything the classifier can't do
@@ -90,6 +130,7 @@ it needs `pip install agentdojo` and an LLM API key; the adapter and a
 standalone `scan_messages_for_injection` helper are tested and ready. Publishing
 the ASR-at-fixed-utility number is the next milestone.
 
-> Numbers measured 2026-06-12 on CPU. Latency is hardware-dependent; the
+> External model numbers measured 2026-06-12; curated/blind snapshots measured
+> 2026-07-25 on CPU. Latency is hardware-dependent; the
 > classifier adds tens of ms/scan on CPU, the vector tier ~20 ms, vs. sub-ms for
 > the deterministic tiers.

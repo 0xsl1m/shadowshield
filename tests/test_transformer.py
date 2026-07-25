@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from types import ModuleType
 
 import pytest
 
@@ -84,6 +89,10 @@ def test_use_transformer_wires_detector_without_loading() -> None:
     shield = ss.Shield.for_mode("balanced", use_transformer=True)
     names = [d.name for d in shield.detectors]
     assert "transformer_classifier" in names
+    assert shield.readiness() == {
+        "ready": False,
+        "not_ready": ["transformer_classifier"],
+    }
 
 
 def test_use_transformer_accepts_model_id() -> None:
@@ -108,6 +117,78 @@ def test_missing_transformers_raises_clear_error(monkeypatch) -> None:
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(ImportError, match="shadowshield\\[transformers\\]"):
         det.scan("x", context=_ctx("x"))
+
+
+# --------------------------------------------------------------------------- #
+# Concurrent lazy loading
+# --------------------------------------------------------------------------- #
+def test_concurrent_first_load_is_single_flight(monkeypatch) -> None:
+    workers = 16
+    start = threading.Barrier(workers)
+    calls = 0
+    calls_lock = threading.Lock()
+    loaded = object()
+
+    def fake_pipeline(**_kwargs):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.02)
+        return loaded
+
+    fake_module = ModuleType("transformers")
+    fake_module.pipeline = fake_pipeline  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers", fake_module)
+    det = TransformerDetector(lazy=True)
+
+    def load():
+        start.wait()
+        return det._ensure_pipeline()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pipelines = list(pool.map(lambda _index: load(), range(workers)))
+
+    assert calls == 1
+    assert all(pipeline is loaded for pipeline in pipelines)
+
+
+def test_failed_pipeline_load_can_retry(monkeypatch) -> None:
+    calls = 0
+    loaded = object()
+
+    def flaky_pipeline(**_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary model load failure")
+        return loaded
+
+    fake_module = ModuleType("transformers")
+    fake_module.pipeline = flaky_pipeline  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers", fake_module)
+    det = TransformerDetector(lazy=True)
+
+    with pytest.raises(RuntimeError, match="temporary model load failure"):
+        det._ensure_pipeline()
+    assert det._pipeline is None
+
+    assert det._ensure_pipeline() is loaded
+    assert calls == 2
+    assert det.is_ready() is True
+
+
+def test_warmup_loads_transformer_explicitly(monkeypatch) -> None:
+    loaded = object()
+    fake_module = ModuleType("transformers")
+    fake_module.pipeline = lambda **_kwargs: loaded  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers", fake_module)
+    det = TransformerDetector(lazy=True)
+
+    assert det.is_ready() is False
+    det.warmup()
+
+    assert det.is_ready() is True
+    assert det._pipeline is loaded
 
 
 # --------------------------------------------------------------------------- #

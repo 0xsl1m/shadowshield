@@ -29,6 +29,17 @@ _EXFIL_INSTRUCTIONS: tuple[tuple[str, Severity, float, str], ...] = (
         "System-prompt extraction attempt.",
     ),
     (
+        r"\b(?:says?|speaks?|recites?|reads?|quotes?)\b[^\r\n]{0,35}?"
+        r"\b(?:(?:secret|hidden|internal|confidential)\s+"
+        r"(?:(?:system|developer)\s+)?(?:prompt|instructions?|message)|"
+        r"(?:full|entire)\s+(?:system|developer)\s+"
+        r"(?:prompt|instructions?|message))\b[^\r\n]{0,24}?"
+        r"\b(?:out\s+loud|verbatim|word\s+for\s+word)\b",
+        Severity.HIGH,
+        0.82,
+        "Instruction to verbalize hidden/system instructions.",
+    ),
+    (
         r"\b(?:repeat|echo|say|print|output|reproduce)\b[^\n]{0,20}?"
         r"\b(?:everything|all|the text|the words|words above|the above|the prompt|"
         r"the system)\b",

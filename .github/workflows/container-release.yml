@@ -1,0 +1,112 @@
+name: Publish release container
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    name: scan and publish exact image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Build release image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${GITHUB_REF_NAME#v}"
+          package_version="$(python -c \
+            'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "$package_version" = "$version"
+          docker build \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$version" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$image:$version" \
+            --tag "$image:sha-$GITHUB_SHA" \
+            .
+          echo "repository=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CycloneDX image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.repository }}:${{ steps.image.outputs.version }}
+          format: cyclonedx
+          output: shadowshield-sbom.cdx.json
+          exit-code: "0"
+
+      - name: Reject fixable high or critical image vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.image.outputs.repository }}:${{ steps.image.outputs.version }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          skip-setup-trivy: true
+
+      - name: Push the exact scanned image
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          IMAGE_VERSION: ${{ steps.image.outputs.version }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" \
+            | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          push_output="$(docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION")"
+          printf '%s\n' "$push_output"
+          digest="$(printf '%s\n' "$push_output" \
+            | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*$/\1/p' \
+            | tail -n 1)"
+          test -n "$digest"
+          printf '%s\n' "$digest" > container-digest.txt
+          docker push "$IMAGE_REPOSITORY:sha-$GITHUB_SHA"
+
+      - name: Verify anonymous immutable pull
+        shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          for _ in $(seq 1 12); do
+            if DOCKER_CONFIG="$anonymous_config" \
+              docker pull "$IMAGE_REPOSITORY@$(cat container-digest.txt)"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "GHCR package is not anonymously pullable; make it public before retrying" >&2
+          exit 1
+
+      - name: Retain release container evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-container-evidence
+          path: |
+            container-digest.txt
+            shadowshield-sbom.cdx.json
+          retention-days: 90
+
+      - name: Attach digest and SBOM to the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            container-digest.txt shadowshield-sbom.cdx.json --clobber

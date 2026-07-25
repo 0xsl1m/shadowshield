@@ -4,6 +4,49 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-07-25
+
+Production follow-through: concurrency correctness, key separation, honest
+generalization benchmarks, readiness, and container supply-chain gates.
+
+### Security
+- Added an independent `SHADOWSHIELD_POLICY_STATE_KEY`. Production durable state
+  now fails closed unless this key is explicit, at least 32 bytes, and distinct
+  from scan, administrator, and policy-signing credentials.
+- Bounded policy-state files before decoding/parsing and require a canonical
+  lowercase SHA-256 MAC. Legacy signing-key state authentication remains available
+  only under explicit local insecure mode; production never silently migrates it.
+- Added `shadowshield migrate-policy-state` for a stopped, verified, backed-up,
+  atomic 0.6.0-to-0.6.1 durable-state re-key. Oversized accepted policies are now
+  rejected before they can write state that would fail the next startup.
+- Digest-pinned the Python container base, added weekly dependency/Docker/Action
+  updates, and made CI reject fixable high/critical image vulnerabilities while
+  retaining a CycloneDX SBOM artifact.
+- Added a release gate that scans before pushing the exact GHCR image and attaches
+  its immutable digest plus SBOM to the GitHub Release; production Compose now
+  requires that `image@sha256` reference instead of rebuilding mutable inputs.
+  Publication also gates on an anonymous pull of that digest.
+
+### Stability
+- Made Transformer model loading single-flight and retryable after failed
+  initialization; made Vector model/index publication atomic and synchronized
+  concurrent self-hardening without holding the mutation lock during inference.
+- Serialized Reporter flushes, bounded each flush to its entry snapshot, added
+  finite opt-in retries, and added idempotent close/context-manager lifecycle
+  accounting so racing records are sent or counted as dropped, never stranded.
+- Added separate `/health` liveness and `/ready` readiness endpoints. Readiness
+  never downloads models; explicit detector warmup supports fail-fast startup.
+
+### Detection and evaluation
+- Fixed high-confidence roleplay extraction, named-persona, forged-role-frame,
+  system/developer-message override, and model-directed developer-mode cases while
+  removing two broad false positives. The curated adversarial set moves from
+  15/2/16/3 to 18/0/18/0 (TP/FP/TN/FN).
+- Added two independently authored blind semantic snapshots and
+  `shadowshield benchmark --generalization {v1,v2,all}`. Their intentionally
+  difficult results remain visible: v1 recall 26.7% / FPR 13.3%; v2 recall 0% /
+  FPR 10%. The public deepset core result is unchanged at 23.3% recall / 0% FPR.
+
 ## [0.6.0] — 2026-07-25
 
 Operability, agentic guarding, and an open-core foundation.
@@ -214,6 +257,8 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.6.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.1
+[0.6.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.0
 [0.5.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.1
 [0.5.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.5.0
 [0.4.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.4.0

@@ -15,6 +15,7 @@ from .dataset import (
     load_adversarial,
     load_builtin,
     load_csv,
+    load_generalization,
     load_huggingface,
     load_jsonl,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "EvalExample",
     "load_builtin",
     "load_adversarial",
+    "load_generalization",
     "load_jsonl",
     "load_csv",
     "load_huggingface",
