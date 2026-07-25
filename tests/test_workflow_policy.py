@@ -134,6 +134,16 @@ def test_release_builds_install_hash_locked_dependencies() -> None:
     assert container_release.index("id: push") < container_release.index(
         "name: Canonicalize release SBOM"
     )
+    canonicalize_index = container_release.index("name: Canonicalize release SBOM")
+    registry_auth_index = container_release.index("name: Authenticate for OCI attestations")
+    sbom_attestation_index = container_release.index("name: Attest release image SBOM")
+    registry_logout_index = container_release.index("name: Remove OCI registry credentials")
+    assert canonicalize_index < registry_auth_index < sbom_attestation_index
+    assert sbom_attestation_index < registry_logout_index
+    assert "printf '%s' \"$GH_TOKEN\"" in container_release
+    assert "docker login ghcr.io" in container_release
+    assert "if: always()" in container_release[registry_logout_index:]
+    assert "docker logout ghcr.io" in container_release[registry_logout_index:]
     assert 'test "$tags_verified" = true' in container_release
     assert "gh release upload" in container_release
     assert "--clobber" not in container_release
