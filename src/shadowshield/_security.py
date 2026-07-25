@@ -204,7 +204,7 @@ class ConcurrencyLimitMiddleware:
             return
         try:
             await asyncio.wait_for(self._semaphore.acquire(), timeout=0.01)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             body = b'{"detail":"server is at scan capacity"}'
             await send(
                 {
