@@ -107,6 +107,17 @@ class Detector(abc.ABC):
 _REGISTRY: dict[str, type[Detector]] = {}
 
 
+def locate_span(text: str, fragment: str, fallback: tuple[int, int]) -> tuple[int, int]:
+    """Best-effort map a match back to *original*-text coordinates.
+
+    Detectors match against the normalized view, but spans should index the original text
+    so the dashboard/telemetry can locate them. If ``fragment`` is found verbatim in
+    ``text`` we use that; otherwise we fall back to the normalized-text span.
+    """
+    idx = text.find(fragment)
+    return (idx, idx + len(fragment)) if idx != -1 else fallback
+
+
 def register_detector(cls: type[Detector]) -> type[Detector]:
     """Class decorator that makes a detector discoverable by the engine.
 

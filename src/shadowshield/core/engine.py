@@ -19,6 +19,7 @@ symmetric, two-way protection.
 from __future__ import annotations
 
 import concurrent.futures
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -94,6 +95,13 @@ class Engine:
         self._weights = {
             name: config.detector_config(name).weight for name in self._detector_names()
         }
+        # Result observers (e.g. the telemetry reporter). Invoked after every evaluate,
+        # so guard()/filter()/scan()/async all report through a single chokepoint.
+        self._observers: list[Callable[[ScanResult, float, str | None], None]] = []
+
+    def add_observer(self, callback: Callable[[ScanResult, float, str | None], None]) -> None:
+        """Register a ``(result, latency_ms, identity)`` callback run after each scan."""
+        self._observers.append(callback)
 
     def _detector_names(self) -> list[str]:
         return [d.name for d in self._detectors]
@@ -112,6 +120,7 @@ class Engine:
         # Bound the work: oversized payloads are scanned as a truncated prefix so
         # a multi-megabyte input can't exhaust CPU. The original text is preserved
         # on the result; only the scanned region is capped.
+        start = time.perf_counter()
         max_chars = self._config.max_input_chars
         oversized = bool(max_chars) and len(text) > max_chars
         scan_text = text[:max_chars] if oversized else text
@@ -162,7 +171,17 @@ class Engine:
 
         result = self._apply_responders(result, context)
         self._record(result, context)
+        self._notify_observers(result, (time.perf_counter() - start) * 1000.0, identity)
         return result
+
+    def _notify_observers(
+        self, result: ScanResult, latency_ms: float, identity: str | None
+    ) -> None:
+        for cb in self._observers:
+            try:
+                cb(result, latency_ms, identity)
+            except Exception:  # an observer must never break the request path
+                continue
 
     # ------------------------------------------------------------------ #
     def _run_cheap_detectors(self, text: str, context: ScanContext) -> list[Threat]:
@@ -243,12 +262,35 @@ class Engine:
         return result
 
     def _record(self, result: ScanResult, context: ScanContext) -> None:
-        event = result.to_dict()
-        event["identity"] = context.identity
-        if not self._audit.redact:
-            event["text"] = truncate(result.text, 400)
+        if self._audit.redact:
+            # Redaction is an allowlist, not a best-effort scrub. Detector messages,
+            # matches, metadata, identities, and previews may all contain attacker-
+            # controlled text, secrets, PII, judge output, or decoded payloads.
+            event: dict[str, Any] = {
+                "direction": result.direction.value,
+                "decision": result.decision.value,
+                "score": round(result.score, 4),
+                "severity": result.severity.label,
+                "is_safe": result.is_safe,
+                "blocked": result.blocked,
+                "sanitized": result.sanitized_text is not None,
+                "payload_length": len(result.text),
+                "identity_present": context.identity is not None,
+                "threats": [
+                    {
+                        "category": threat.category.value,
+                        "severity": threat.severity.label,
+                        "score": round(threat.score, 4),
+                        "detector": threat.detector,
+                        "span": list(threat.span) if threat.span else None,
+                    }
+                    for threat in result.threats
+                ],
+            }
         else:
-            event["text_preview"] = truncate(result.text, 80)
+            event = result.to_dict()
+            event["identity"] = context.identity
+            event["text"] = truncate(result.text, 400)
         # Clean, threat-free scans are logged at DEBUG (quiet by default);
         # anything noteworthy is logged at INFO.
         notable = bool(result.threats) or not result.is_safe

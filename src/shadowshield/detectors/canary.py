@@ -45,6 +45,7 @@ class CanaryLeakDetector(Detector):
                     ),
                     # Never echo the canary value itself into the audit record.
                     matched=None,
+                    span=(idx, idx + len(canary)),
                     metadata={"canary_prefix": canary.split("-")[0]},
                 )
             )

@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+__pycache__
+*.pyc
+*.log
+.coverage
+coverage.xml
+dist
+production-dist
+site

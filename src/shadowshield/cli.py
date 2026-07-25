@@ -52,7 +52,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         if result.sanitized_text is not None and result.sanitized_text != result.text:
             print(f"safe_text: {result.safe_text}")
 
-    # Exit non-zero when the payload is not safe — handy in shell pipelines/CI.
+    # Exit non-zero when the payload is not safe - handy in shell pipelines/CI.
     return 1 if not result.is_safe else 0
 
 
@@ -69,8 +69,25 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_schema(args: argparse.Namespace) -> int:
+    # The config is a Pydantic model, so its JSON Schema comes for free - useful for
+    # editor validation, CI checks, and generating config UIs.
+    print(json.dumps(ShieldConfig.model_json_schema(), indent=2))
+    return 0
+
+
+def _cmd_owasp(args: argparse.Namespace) -> int:
+    from .core.coverage import format_coverage_text, owasp_coverage
+
+    if args.json:
+        print(json.dumps(owasp_coverage(), indent=2))
+    else:
+        print(format_coverage_text())
+    return 0
+
+
 def _cmd_benchmark(args: argparse.Namespace) -> int:
-    from .eval import evaluate_shield, load_builtin, load_csv, load_jsonl
+    from .eval import evaluate_shield, load_adversarial, load_builtin, load_csv, load_jsonl
 
     if args.dataset:
         loader = load_csv if args.dataset.lower().endswith(".csv") else load_jsonl
@@ -79,6 +96,8 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         from .eval import load_huggingface
 
         examples = load_huggingface(args.hf, split=args.split)
+    elif args.adversarial:
+        examples = load_adversarial()
     else:
         examples = load_builtin()
 
@@ -91,17 +110,39 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        src = args.dataset or args.hf or "builtin"
+        src = args.dataset or args.hf or ("adversarial" if args.adversarial else "builtin")
         print(f"dataset: {src}   mode: {args.mode}")
         print(report.format_text())
     return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    if args.control:
+        from .control import serve_control
+
+        print(
+            f"ShadowShield control dashboard on http://{args.host}:{args.port}  (mode={args.mode})"
+        )
+        serve_control(
+            host=args.host,
+            port=args.port,
+            mode=args.mode,
+            api_keys=args.api_key,
+            cors_origins=args.cors_origin,
+            policy_key=args.policy_key,
+        )
+        return 0
+
     from .server import serve
 
     print(f"ShadowShield server on http://{args.host}:{args.port}  (mode={args.mode})")
-    serve(host=args.host, port=args.port, mode=args.mode)
+    serve(
+        host=args.host,
+        port=args.port,
+        mode=args.mode,
+        api_keys=args.api_key,
+        cors_origins=args.cors_origin,
+    )
     return 0
 
 
@@ -132,11 +173,23 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="print an annotated default config")
     init.set_defaults(func=_cmd_init)
 
+    schema = sub.add_parser("schema", help="print the config JSON Schema (for tooling/CI)")
+    schema.set_defaults(func=_cmd_schema)
+
+    owasp = sub.add_parser("owasp", help="show OWASP LLM Top 10 (2025) coverage")
+    owasp.add_argument("--json", action="store_true", help="emit JSON")
+    owasp.set_defaults(func=_cmd_owasp)
+
     bench = sub.add_parser("benchmark", help="benchmark detection quality + latency")
     bench.add_argument(
         "--dataset", default=None, help="path to a JSONL/CSV dataset (default: bundled benchmark)"
     )
     bench.add_argument("--hf", default=None, help="HuggingFace dataset id (needs 'datasets')")
+    bench.add_argument(
+        "--adversarial",
+        action="store_true",
+        help="use the harder bundled adversarial set (honest, sub-100%% numbers)",
+    )
     bench.add_argument("--split", default="test", help="HF split (default: test)")
     bench.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
     bench.add_argument(
@@ -153,6 +206,31 @@ def build_parser() -> argparse.ArgumentParser:
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=8000)
     serve_p.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
+    serve_p.add_argument(
+        "--control",
+        action="store_true",
+        help="serve the full control dashboard (live feed, metrics, config, benchmark)",
+    )
+    serve_p.add_argument(
+        "--api-key",
+        action="append",
+        default=None,
+        metavar="KEY",
+        help="require this API key (X-API-Key/Bearer); repeatable. Also SHADOWSHIELD_API_KEY",
+    )
+    serve_p.add_argument(
+        "--cors-origin",
+        action="append",
+        default=None,
+        metavar="ORIGIN",
+        help="allow this browser origin (repeatable). Also SHADOWSHIELD_CORS_ORIGINS",
+    )
+    serve_p.add_argument(
+        "--policy-key",
+        default=None,
+        metavar="KEY",
+        help="HMAC key required to accept pushed policy bundles (control mode)",
+    )
     serve_p.set_defaults(func=_cmd_serve)
     return parser
 

@@ -3,25 +3,36 @@
 Exposes a :class:`~shadowshield.Shield` over HTTP so non-Python services (or a
 browser) can scan text. Endpoints:
 
-- ``GET  /health`` — liveness + version + active detectors
-- ``POST /scan``   — full :class:`ScanResult` for a payload
-- ``POST /guard``  — safe text + block decision (fail-soft)
-- ``GET  /``       — a tiny live dashboard (textarea → /scan)
+- ``GET  /health`` - liveness + version + active detectors
+- ``POST /scan``   - full :class:`ScanResult` for a payload
+- ``POST /guard``  - safe text + block decision (fail-soft)
+- ``GET  /``       - a tiny live dashboard (textarea -> /scan)
 
 Run it: ``shadowshield serve`` (or ``uvicorn`` against :func:`create_app`).
 Requires the ``dashboard`` extra: ``pip install shadowshield[dashboard]``.
 
-Security note: this server scans untrusted text but is itself an unauthenticated
-control plane — put it behind your own auth/network boundary. It never logs raw
-payloads beyond the shield's own redacting audit policy.
+Security: this server scans untrusted text but is itself a control plane. Pass
+``api_keys`` (or set ``SHADOWSHIELD_API_KEY``) to require ``X-API-Key``/``Bearer``
+auth on ``/scan`` and ``/guard``; restrict browser origins with ``cors_origins``
+(or ``SHADOWSHIELD_CORS_ORIGINS``). With no key set it is unauthenticated - keep it
+behind your own network boundary. It never logs raw payloads beyond the shield's
+own redacting audit policy.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from pydantic import BaseModel
 
+from ._security import (
+    extract_key,
+    is_loopback,
+    key_is_valid,
+    resolve_api_keys,
+    resolve_cors_origins,
+)
 from .core.shield import Shield
 from .core.types import Direction
 
@@ -51,9 +62,13 @@ _DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <button onclick="scan()">Scan</button>
 <p class="verdict" id="v"></p><pre id="out"></pre>
 <script>
+let KEY=sessionStorage.getItem('ss_key')||'';
 async function scan(){
- const r=await fetch('/scan',{method:'POST',headers:{'Content-Type':'application/json'},
+ const headers={'Content-Type':'application/json'};
+ if(KEY) headers['X-API-Key']=KEY;
+ let r=await fetch('/scan',{method:'POST',headers,
    body:JSON.stringify({text:document.getElementById('t').value,direction:document.getElementById('dir').value})});
+ if(r.status===401){const k=prompt('API key required:');if(k){KEY=k;sessionStorage.setItem('ss_key',k);return scan();}return;}
  const d=await r.json();const v=document.getElementById('v');
  const cls=d.blocked?'block':(d.is_safe?'ok':'flag');
  v.className='verdict '+cls;v.textContent=(d.blocked?'BLOCKED':d.decision.toUpperCase())+'  ·  score '+d.score+'  ·  '+d.severity;
@@ -62,10 +77,20 @@ async function scan(){
 </script></body></html>"""
 
 
-def create_app(shield: Shield | None = None) -> Any:
-    """Build a FastAPI app bound to ``shield`` (a balanced shield by default)."""
+def create_app(
+    shield: Shield | None = None,
+    *,
+    api_keys: list[str] | None = None,
+    cors_origins: list[str] | None = None,
+) -> Any:
+    """Build a FastAPI app bound to ``shield`` (a balanced shield by default).
+
+    ``api_keys``/``cors_origins`` merge with the ``SHADOWSHIELD_API_KEY`` /
+    ``SHADOWSHIELD_CORS_ORIGINS`` env vars. When a key is configured, ``/scan`` and
+    ``/guard`` require ``X-API-Key`` or ``Bearer`` auth; ``/health`` and ``/`` stay open.
+    """
     try:
-        from fastapi import FastAPI
+        from fastapi import Depends, FastAPI, Header, HTTPException
         from fastapi.responses import HTMLResponse
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(
@@ -74,23 +99,53 @@ def create_app(shield: Shield | None = None) -> Any:
 
     from . import __version__
 
+    keys = resolve_api_keys(api_keys)
+    origins = resolve_cors_origins(cors_origins)
+
     guard = shield or Shield.for_mode("balanced")
     app = FastAPI(title="ShadowShield", version=__version__)
+
+    if origins:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+        )
+
+    def require_auth(
+        x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+        authorization: str | None = Header(default=None),
+    ) -> None:
+        if not keys:
+            return
+        if not key_is_valid(extract_key(x_api_key, authorization), keys):
+            raise HTTPException(
+                status_code=401,
+                detail="missing or invalid API key",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    guarded = [Depends(require_auth)]
 
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "version": __version__,
+            "auth_required": bool(keys),
             "detectors": [d.name for d in guard.detectors],
         }
 
-    @app.post("/scan")
+    @app.post("/scan", dependencies=guarded)
     def scan(req: ScanRequest) -> dict[str, Any]:
         result = guard.scan(req.text, direction=Direction(req.direction), identity=req.identity)
         return result.to_dict()
 
-    @app.post("/guard")
+    @app.post("/guard", dependencies=guarded)
     def guard_endpoint(req: ScanRequest) -> dict[str, Any]:
         result = guard.scan(req.text, direction=Direction(req.direction), identity=req.identity)
         return {
@@ -107,7 +162,12 @@ def create_app(shield: Shield | None = None) -> Any:
 
 
 def serve(
-    host: str = "127.0.0.1", port: int = 8000, mode: str = "balanced"
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    mode: str = "balanced",
+    *,
+    api_keys: list[str] | None = None,
+    cors_origins: list[str] | None = None,
 ) -> None:  # pragma: no cover
     """Run the server with uvicorn (used by ``shadowshield serve``)."""
     try:
@@ -116,4 +176,13 @@ def serve(
         raise ImportError(
             "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
         ) from exc
-    uvicorn.run(create_app(Shield.for_mode(mode)), host=host, port=port)
+    if not resolve_api_keys(api_keys) and not is_loopback(host):
+        print(
+            f"WARNING: server bound to {host} with NO API key set.",
+            file=sys.stderr,
+        )
+    uvicorn.run(
+        create_app(Shield.for_mode(mode), api_keys=api_keys, cors_origins=cors_origins),
+        host=host,
+        port=port,
+    )

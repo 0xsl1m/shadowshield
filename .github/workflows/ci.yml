@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -37,7 +37,12 @@ jobs:
       - name: Type-check
         run: mypy src/shadowshield
       - name: Test
-        run: pytest --cov=shadowshield --cov-report=term-missing
+        run: pytest --cov=shadowshield --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@v5
+        if: matrix.python-version == '3.14'
+        with:
+          name: coverage
+          path: coverage.xml
 
   # Heavy: exercise the optional ML classifier + vector-similarity layers against
   # real models. Separate job so a slow model download never blocks PR feedback.
@@ -76,7 +81,26 @@ jobs:
         run: |
           pip install twine
           twine check dist/*
+      - name: Smoke-test installed wheel
+        run: |
+          python -m venv /tmp/shadowshield-smoke
+          /tmp/shadowshield-smoke/bin/pip install dist/*.whl
+          /tmp/shadowshield-smoke/bin/shadowshield --version
+          /tmp/shadowshield-smoke/bin/shadowshield scan --text "hello"
       - uses: actions/upload-artifact@v5
         with:
           name: dist
           path: dist/*
+
+  dependency-audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Audit declared dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip_audit .

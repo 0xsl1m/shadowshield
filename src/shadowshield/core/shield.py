@@ -119,6 +119,16 @@ class Shield:
     def detectors(self) -> list[Detector]:
         return list(self._detectors)
 
+    def add_result_observer(
+        self, callback: Callable[[ScanResult, float, str | None], None]
+    ) -> None:
+        """Register a ``(result, latency_ms, identity)`` callback run after every scan.
+
+        Routed through the engine, so it fires for ``scan``/``guard``/``filter`` and their
+        async variants alike. Used by the telemetry reporter; observer errors are swallowed.
+        """
+        self._engine.add_observer(callback)
+
     # ------------------------------------------------------------------ #
     # Core scanning
     # ------------------------------------------------------------------ #
