@@ -1,20 +1,21 @@
 # Production readiness roadmap
 
-**Baseline:** ShadowShield 0.6.2 · **Audit date:** 2026-07-25
+**Baseline:** ShadowShield 0.6.3 · **Audit date:** 2026-07-25
 
 This roadmap is the release gate for the Python library and the optional HTTP
-control plane. A checked item is implemented and locally verified; unchecked
-items require an explicit operator or maintainer decision before public launch.
+control plane. A checked item is implemented and locally verified. The
+operator-owned unchecked items do not block the library or static site, but they
+must be resolved before exposing the optional HTTP control plane publicly.
 
 ## Current readiness
 
 | Area | State | Evidence / remaining action |
 |---|---|---|
-| Correctness | Ready | 290+ unit/integration cases; strict mypy; Ruff lint/format; CodeQL extended scanning |
-| Packaging | Ready | Isolated sdist/wheel build, Twine metadata check, installed-wheel CI smoke test |
-| Runtime security | Ready with configuration | Early API-key/Bearer auth, body limits, restricted CORS, immutable protection floor, non-root read-only container |
-| Supply chain | Ready | Repository-enforced Action SHA pins, PyPI OIDC, exact-green-main release gates, pre-push image vulnerability gate, anonymous GHCR digest pull, registry-verified SLSA and CycloneDX attestations |
-| Observability | Ready for single process | Content-free telemetry, Prometheus endpoint, bounded in-memory event feed |
+| Correctness | Ready | 320 unit/integration cases; strict mypy; Ruff lint/format; CodeQL extended scanning |
+| Packaging | Ready | Hash-locked build environment, byte-for-byte repeat build gate, Twine validation, installed-wheel smoke test |
+| Runtime security | Ready with configuration | Early API-key/Bearer auth, bounded/deadlined body intake, detector-failure policy, restricted CORS, immutable protection floor, non-root read-only container |
+| Supply chain | Ready | Digest/SHA-pinned build inputs, PyPI OIDC, exact-green-main release gates, immutable image/evidence handling, pre-push vulnerability gate, anonymous GHCR digest pull, registry-verified SLSA and CycloneDX attestations |
+| Observability | Ready for single process | Content-free telemetry, detector-error counters, Prometheus endpoint, bounded in-memory event feed |
 | Detection quality | Beta | Curated adversarial: 100%/0% FPR; blind v1–v3 aggregate: 22.2%/20%; v3: 30%/30%; deepset core: 23.3%/0% |
 | Scale / HA | Not yet | Counters, events, configuration, and rate limits are process-local |
 | Streaming | Not yet | Outputs must be buffered before scanning |
@@ -23,7 +24,7 @@ items require an explicit operator or maintainer decision before public launch.
 
 - [x] Repair control-plane syntax and restore test collection.
 - [x] Make optional-dependency tests and typing deterministic with or without MCP installed.
-- [x] Enforce an 80% branch-aware coverage floor (current local result: 85%).
+- [x] Enforce an 80% branch-aware coverage floor (current local result: 86%).
 - [x] Test every declared Python runtime, 3.10 through 3.14, in CI.
 - [x] Build and validate both distribution formats and smoke-test the installed wheel.
 - [x] Audit declared dependencies in CI (local audit: no known vulnerabilities).
@@ -61,6 +62,23 @@ items require an explicit operator or maintainer decision before public launch.
   push-protection, and repository-level enforcement of full-SHA Action pins.
 - [x] Publish a third independently authored blind snapshot and reject—not
   tune—the first frozen candidate when it missed the predeclared FPR/accuracy bar.
+- [x] Make documented session guard calls record clean and blocked turns exactly
+  once so multi-turn and alignment checks receive the advertised trace.
+- [x] Surface bounded, content-free detector failures in every result, audit,
+  benchmark, control event, and Prometheus metric; make strict mode fail closed.
+- [x] Coalesce HTTP request frames, cap fragmentation, and apply one total body
+  deadline so authenticated slow/chunked bodies cannot pin all scan slots;
+  authenticate protected non-preflight methods before body/admission work.
+- [x] Hash-lock release build and container dependencies, pin the Dockerfile
+  frontend, remove the unused mandatory tokenizer dependency, and require two
+  byte-identical distribution builds.
+- [x] Upgrade maintained Actions to their Node 24 generations, bound every CI
+  job with a timeout, and refuse conflicting image tags or release assets while
+  allowing only attested exact-source digest recovery of an interrupted
+  container publication.
+- [x] Make benchmark evidence fail visibly on warmup, readiness, or detector
+  errors and report class-conditional per-slice confusion metrics with 95%
+  Wilson confidence intervals.
 
 ## P1 — launch procedure (operator-owned)
 
@@ -73,7 +91,8 @@ items require an explicit operator or maintainer decision before public launch.
 - [ ] Set an explicit CORS allowlist or leave CORS disabled.
 - [ ] Run the adversarial and application-specific eval sets in permissive/shadow mode.
 - [ ] Choose thresholds from measured false-positive cost; record the accepted baseline.
-- [ ] Connect Prometheus and content-free telemetry; alert on error, block-rate, and latency shifts.
+- [ ] Connect Prometheus and content-free telemetry; alert on detector errors,
+  readiness, block-rate, and latency shifts.
 - [ ] Load-test representative payload sizes and concurrency on the target instance class.
 - [ ] Record the deployed image digest and CI SBOM, then rehearse backup/restore
   and rollback against the target environment.
@@ -89,7 +108,11 @@ items require an explicit operator or maintainer decision before public launch.
 5. Split the current administrator credential into narrower observe and mutation scopes.
 6. Design cross-process model/index coordination and durable Reporter spooling.
 7. Split unprivileged container build/scan from the write/OIDC publication job.
-8. Refactor release evidence into a draft-first pipeline, then enable immutable releases.
+8. Refactor release evidence into a draft-first pipeline with independently
+   promoted, already-scanned OCI artifacts.
+9. Pin optional model revisions, pre-cache them for offline production startup,
+   and bound model-loading time.
+10. Add vulnerability-audit matrices for every supported optional dependency stack.
 
 ## Go / no-go gates
 

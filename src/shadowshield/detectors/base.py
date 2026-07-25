@@ -46,6 +46,7 @@ class ScanContext:
         options: The active detector's per-deployment ``options`` dict.
         identity: Opaque caller identity (session/user id) for rate limiting.
         metadata: Free-form scratch space shared across detectors in one scan.
+        detector_errors: Bounded, content-free counts of detector failures.
     """
 
     direction: Direction
@@ -57,6 +58,7 @@ class ScanContext:
     canaries: tuple[str, ...] = ()
     objective: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    detector_errors: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def build(

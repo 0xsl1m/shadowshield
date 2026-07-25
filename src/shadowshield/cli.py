@@ -111,11 +111,16 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     else:
         examples = load_builtin()
 
-    shield = Shield(
-        ShieldConfig.for_mode(Mode(args.mode)),
-        use_transformer=args.transformer or False,
-    )
-    report = evaluate_shield(shield, examples)
+    benchmark_config = ShieldConfig.for_mode(Mode(args.mode))
+    # Audit output is unrelated to detector quality, distorts latency, and can
+    # corrupt the benchmark command's JSON stdout. Benchmark reports still
+    # retain bounded runtime-integrity counters.
+    benchmark_config.logging.enabled = False
+    shield = Shield(benchmark_config, use_transformer=args.transformer or False)
+    # Model/index initialization is deliberately outside timed scans. Any
+    # warmup, readiness, or per-scan detector failure makes the benchmark
+    # explicitly unreliable and produces a non-zero exit status.
+    report = evaluate_shield(shield, examples, warmup=True)
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
@@ -128,7 +133,7 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         )
         print(f"dataset: {src}   mode: {args.mode}")
         print(report.format_text())
-    return 0
+    return 0 if report.reliable else 1
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:

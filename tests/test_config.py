@@ -14,6 +14,8 @@ def test_mode_presets_differ() -> None:
     assert strict.block_threshold < permissive.block_threshold
     assert strict.policy.medium == Decision.BLOCK
     assert permissive.policy.medium == Decision.FLAG
+    assert strict.fail_closed_on_detector_error is True
+    assert permissive.fail_closed_on_detector_error is False
 
 
 def test_for_mode_overrides() -> None:

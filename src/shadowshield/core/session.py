@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import TYPE_CHECKING
 
-from .types import Direction, ScanResult
+from .types import Direction, ScanResult, ThreatBlockedError
 
 if TYPE_CHECKING:
     from .shield import Shield
@@ -93,37 +93,52 @@ class ShieldedSession:
 
     # -- scanning ------------------------------------------------------- #
     def scan_input(self, text: str) -> ScanResult:
-        result = self._shield.scan(
-            text, direction=Direction.INPUT, identity=self.identity, history=self.history
+        return self._scan_and_record(
+            text,
+            direction=Direction.INPUT,
         )
-        self.history.add(Direction.INPUT, text, result)
-        return result
 
     def scan_output(self, text: str) -> ScanResult:
-        result = self._shield.scan(
+        return self._scan_and_record(
             text,
             direction=Direction.OUTPUT,
-            identity=self.identity,
-            history=self.history,
             objective=self.objective,
         )
-        self.history.add(Direction.OUTPUT, text, result)
+
+    def _scan_and_record(
+        self,
+        text: str,
+        *,
+        direction: Direction,
+        objective: str | None = None,
+    ) -> ScanResult:
+        """Scan exactly once and retain blocked turns before propagating errors."""
+        try:
+            result = self._shield.scan(
+                text,
+                direction=direction,
+                identity=self.identity,
+                history=self.history,
+                objective=objective,
+            )
+        except ThreatBlockedError as exc:
+            self.history.add(direction, text, exc.result)
+            raise
+        self.history.add(direction, text, result)
         return result
 
     def guard_input(self, text: str) -> str:
         """Scan input and return safe text, raising on a block (strict ergonomics)."""
-        return self._shield.guard(
-            text, direction=Direction.INPUT, identity=self.identity, history=self.history
-        )
+        result = self.scan_input(text)
+        if result.blocked:
+            raise ThreatBlockedError(result)
+        return result.safe_text
 
     def guard_output(self, text: str) -> str:
-        return self._shield.guard(
-            text,
-            direction=Direction.OUTPUT,
-            identity=self.identity,
-            history=self.history,
-            objective=self.objective,
-        )
+        result = self.scan_output(text)
+        if result.blocked:
+            raise ThreatBlockedError(result)
+        return result.safe_text
 
     # -- context manager ------------------------------------------------ #
     def __enter__(self) -> ShieldedSession:

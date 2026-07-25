@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from shadowshield import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "site"
 
@@ -36,6 +38,17 @@ def test_www_redirects_to_canonical_apex_without_open_redirect() -> None:
             "permanent": True,
         }
     ]
+
+
+def test_public_site_version_matches_the_package() -> None:
+    index = (SITE / "index.html").read_text(encoding="utf-8")
+    og = (SITE / "og.html").read_text(encoding="utf-8")
+    llms = (SITE / "llms-full.txt").read_text(encoding="utf-8")
+
+    assert f'"softwareVersion": "{__version__}"' in index
+    assert f"v<b>{__version__}</b>" in index
+    assert f"v{__version__} · Agentic-AI Security" in og
+    assert f"Version: {__version__}" in llms
 
 
 def test_site_security_headers_are_fail_closed() -> None:

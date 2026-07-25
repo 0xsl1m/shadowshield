@@ -67,8 +67,10 @@ identity to block on its own.
 
 ## Fail-safe defaults
 
-- **Detector errors fail safe.** A detector that raises drops only its own
-  contribution; the scan continues with the other layers.
+- **Detector errors are visible.** The other independent layers continue, while
+  bounded content-free metadata and metrics identify the failed detector. Strict
+  mode forces a block; balanced/permissive report the failure unless configured
+  to fail closed.
 - **`guard()` fails closed** (raises), **`filter()` fails soft** (returns the safe
   fallback). You choose per call site.
 - **Secrets are never echoed.** Secret matches are redacted from `Threat` records

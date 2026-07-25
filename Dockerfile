@@ -1,11 +1,13 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
+COPY requirements/build.lock requirements/build.lock
+RUN python -m pip install --no-cache-dir --only-binary=:all: \
+        --require-hashes -r requirements/build.lock
 COPY src ./src
-RUN python -m pip install --no-cache-dir build \
-    && python -m build --wheel
+RUN python -m build --wheel --no-isolation
 
 FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS runtime
 
@@ -16,9 +18,13 @@ RUN addgroup --system shadowshield \
     && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \
     && mkdir -p /var/lib/shadowshield \
     && chown shadowshield:shadowshield /var/lib/shadowshield
+COPY requirements/container.lock /tmp/container.lock
 COPY --from=builder /build/dist/*.whl /tmp/
-RUN python -m pip install --no-cache-dir /tmp/*.whl "fastapi>=0.110" "uvicorn>=0.29" \
-    && rm -f /tmp/*.whl
+RUN python -m pip install --no-cache-dir --only-binary=:all: \
+        --require-hashes -r /tmp/container.lock \
+    && python -m pip install --no-cache-dir --no-deps /tmp/*.whl \
+    && python -m pip check \
+    && rm -f /tmp/*.whl /tmp/container.lock
 
 USER shadowshield
 EXPOSE 8000

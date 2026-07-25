@@ -101,6 +101,12 @@ def _find_markdown_beacon(text: str) -> tuple[int, int, bool] | None:
     while treating overlong fields as suspicious instead of exempting them.
     Returns ``(start, end, oversized_carrier)``.
     """
+    # Ordinary prose overwhelmingly contains no image opener. Let CPython's
+    # optimized substring search reject it once instead of calling startswith()
+    # at every character in the parser below.
+    if "![" not in text:
+        return None
+
     opener: int | None = None
     i = 0
     size = len(text)

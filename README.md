@@ -134,8 +134,8 @@ pip install "shadowshield[dashboard]"      # + FastAPI HTTP server & dashboard
 pip install "shadowshield[all]"            # everything
 ```
 
-Core deps are intentionally small: `pydantic`, `structlog`, `pyyaml`, `httpx`,
-`tiktoken`. The ML classifier, Presidio PII, dataset loaders, and dashboard live
+Core deps are intentionally small: `pydantic`, `structlog`, `pyyaml`, and
+`httpx`. The ML classifier, Presidio PII, dataset loaders, and dashboard live
 behind extras — the default install pulls **no** heavy ML stack.
 
 ---
@@ -257,7 +257,7 @@ export SHADOWSHIELD_ADMIN_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
 docker compose pull
 docker compose up -d
 ```
@@ -278,14 +278,14 @@ Upgrading a control-plane volume from 0.6.0 requires an offline re-key because
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 # Stop every writer and snapshot the volume before running the migration.
 docker compose stop shadowshield
 docker compose run --rm --no-deps shadowshield \
   shadowshield migrate-policy-state --path /var/lib/shadowshield/policy-state.json
-# Preserve the reported .pre-0.6.1.bak file, then start 0.6.2.
+# Preserve the reported .pre-0.6.1.bak file, then start 0.6.3.
 docker compose up -d
 ```
 
