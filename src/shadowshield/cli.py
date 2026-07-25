@@ -258,7 +258,10 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         const=True,
         default=False,
-        help="add the ML classifier (optionally a model id); needs 'transformers'",
+        help=(
+            "add the ML classifier (optionally a model id or 'multilingual' preset); "
+            "needs 'transformers'"
+        ),
     )
     bench.add_argument("--json", action="store_true", help="emit JSON")
     bench.set_defaults(func=_cmd_benchmark)

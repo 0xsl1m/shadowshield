@@ -76,6 +76,23 @@ jobs:
         env:
           SHADOWSHIELD_RUN_MODEL_TESTS: "1"
         run: pytest -m integration tests/test_transformer.py tests/test_vector.py
+      - name: Verify gated multilingual Prompt Guard and publish benchmark evidence
+        if: >-
+          github.event_name == 'push' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HF_HUB_DISABLE_TELEMETRY: "1"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SHADOWSHIELD_RUN_GATED_MODEL_TESTS: "1"
+        run: |
+          set -euo pipefail
+          test -n "${HF_TOKEN:-}"
+          pytest -m integration tests/test_transformer.py -k real_gated_multilingual_model
+          shadowshield benchmark \
+            --hf deepset/prompt-injections \
+            --split test \
+            --transformer multilingual \
+            --json
 
   build:
     name: build sdist + wheel

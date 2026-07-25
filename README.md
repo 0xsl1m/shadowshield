@@ -339,7 +339,11 @@ with shield.session(objective="Summarize my inbox") as s:
 ```python
 # DeBERTa classifier — biggest recall jump.  pip install "shadowshield[transformers]"
 shield = ss.Shield.for_mode("strict", use_transformer=True)   # ProtectAI v2 by default
-# multilingual model: use_transformer="meta-llama/Llama-Prompt-Guard-2-22M" (gated; HF login)
+# True multilingual preset: pinned Meta Prompt Guard 2 86M (gated; requires HF_TOKEN).
+shield = ss.Shield.for_mode("strict", use_transformer="multilingual")
+# Lower-latency Meta option (weaker multilingual recall):
+# use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"
+# Meta models require browser-approved access plus `hf auth login` or `HF_TOKEN`.
 
 # Vector similarity — catches paraphrases/translations of known attacks, self-hardening.
 # pip install "shadowshield[vectors]"

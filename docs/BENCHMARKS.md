@@ -144,11 +144,16 @@ whole point (over-defense is the field's failure mode).
   regex-only — using `protectai/deberta-v3-base-prompt-injection-v2` (configurable).
 
 48% (not higher) is honest, not cherry-picked: `deepset` is heavily German and the
-default classifier is English-trained. For stronger non-English ML coverage, swap
-in a **multilingual model** — `meta-llama/Llama-Prompt-Guard-2-22M` (mDeBERTa, 22M)
-via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`. Note: the Prompt-Guard-2
-models are **gated** on HuggingFace — accept the license and run `huggingface-cli
-login` (or set `HF_TOKEN`) first. The default ProtectAI model needs no token.
+default classifier is English-trained. For stronger non-English ML coverage, use
+the true multilingual preset with `use_transformer="multilingual"`. It resolves
+to the mDeBERTa-based `meta-llama/Llama-Prompt-Guard-2-86M` at a reviewed immutable
+Hub revision. The lower-latency 22M model uses an English DeBERTa-xsmall base and
+has weaker multilingual performance.
+
+Both Meta models are manually **gated** on Hugging Face: request and receive
+account access in the browser, then use `hf auth login` or set `HF_TOKEN`. The
+token is resolved by Hugging Face and is never copied into ShadowShield objects,
+logs, findings, or benchmark output. The default ProtectAI model needs no token.
 
 ## 5. Interpretation & roadmap
 
