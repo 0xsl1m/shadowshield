@@ -4,6 +4,22 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Added `use_transformer="multilingual"` as a credential-safe alias for the
+  genuinely multilingual Meta Llama Prompt Guard 2 86M classifier. Known gated
+  Meta models now use reviewed immutable Hub revisions and request authentication
+  through `HF_TOKEN` or the Hugging Face login cache without retaining raw tokens.
+- Added a repository-owned credentialed CI smoke over German, Spanish, French,
+  and Hindi attack/benign pairs plus an honest deepset benchmark. Fork pull
+  requests do not receive or exercise the repository token.
+
+### Changed
+- Corrected documentation that previously described the fast 22M
+  DeBERTa-xsmall model as mDeBERTa. The 86M model is the multilingual preset; the
+  22M option remains available explicitly for lower-latency deployments.
+
 ## [0.6.3] — 2026-07-25
 
 Post-launch reliability, request-intake, observability, performance, and

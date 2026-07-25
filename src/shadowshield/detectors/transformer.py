@@ -27,8 +27,25 @@ from ..core.types import Direction, Severity, Threat, ThreatCategory
 from .base import Detector, ScanContext
 
 # Well-known, permissively-licensed prompt-injection classifier. Override via the
-# ``model`` argument (e.g. "meta-llama/Llama-Prompt-Guard-2-86M").
+# ``model`` argument (e.g. ``model="multilingual"``).
 DEFAULT_MODEL = "protectai/deberta-v3-base-prompt-injection-v2"
+
+# Meta's 86M backbone is the genuinely multilingual Prompt Guard 2 variant. The
+# 22M model is faster but uses an English DeBERTa-xsmall base and has materially
+# weaker multilingual performance. Pin both gated presets to reviewed Hub commits
+# so a mutable model branch cannot silently change production behavior.
+MULTILINGUAL_MODEL_ALIAS = "multilingual"
+MULTILINGUAL_MODEL = "meta-llama/Llama-Prompt-Guard-2-86M"
+MULTILINGUAL_MODEL_REVISION = "a8ded8e697ce7c355e395a0df51f94adb4a2fd27"
+FAST_META_MODEL = "meta-llama/Llama-Prompt-Guard-2-22M"
+FAST_META_MODEL_REVISION = "11614a155199674a0a95e6602d6ab0417b790ed0"
+
+_MODEL_ALIASES = {MULTILINGUAL_MODEL_ALIAS: MULTILINGUAL_MODEL}
+_PINNED_REVISIONS = {
+    MULTILINGUAL_MODEL: MULTILINGUAL_MODEL_REVISION,
+    FAST_META_MODEL: FAST_META_MODEL_REVISION,
+}
+_GATED_MODELS = frozenset(_PINNED_REVISIONS)
 
 # Label strings different models use for the "this is an attack" class.
 _ATTACK_LABELS = {"INJECTION", "JAILBREAK", "LABEL_1", "1", "UNSAFE", "MALICIOUS"}
@@ -79,6 +96,11 @@ class TransformerDetector(Detector):
         max_length: token truncation length passed to the tokenizer.
         device: torch device string (e.g. "cpu", "cuda", "mps"). ``None`` lets
             transformers choose.
+        revision: immutable model revision. Known Meta presets default to reviewed
+            commit pins; custom models retain the Hugging Face default when omitted.
+        authenticated: load credentials from ``HF_TOKEN`` or the Hugging Face login
+            cache. Known gated Meta presets enable this automatically. Raw tokens are
+            intentionally not accepted or retained by the detector.
         lazy: if True (default) the model loads on first scan, not at construction,
             so importing/constructing stays cheap.
     """
@@ -93,12 +115,18 @@ class TransformerDetector(Detector):
         threshold: float = 0.5,
         max_length: int = 512,
         device: str | None = None,
+        revision: str | None = None,
+        authenticated: bool | None = None,
         lazy: bool = True,
     ) -> None:
-        self.model_id = model
+        self.model_id = _MODEL_ALIASES.get(model, model)
         self.threshold = threshold
         self.max_length = max_length
         self.device = device
+        self.revision = revision if revision is not None else _PINNED_REVISIONS.get(self.model_id)
+        self.authenticated = (
+            authenticated if authenticated is not None else self.model_id in _GATED_MODELS
+        )
         self._pipeline: Any | None = None
         self._load_lock = threading.Lock()
         self._load_condition = threading.Condition(self._load_lock)
@@ -153,6 +181,13 @@ class TransformerDetector(Detector):
             }
             if self.device is not None:
                 kwargs["device"] = self.device
+            if self.revision is not None:
+                kwargs["revision"] = self.revision
+            if self.authenticated:
+                # ``token=True`` asks Hugging Face to resolve credentials from its
+                # secure cache or HF_TOKEN. Never copy a bearer token into this
+                # object, logs, threat metadata, or exception messages.
+                kwargs["token"] = True
             loaded = pipeline(**kwargs)
         except BaseException as exc:
             prototype: BaseException = RuntimeError("model load failed")
@@ -207,6 +242,9 @@ class TransformerDetector(Detector):
         attack_prob = score if is_attack else (1.0 - score)
         if attack_prob < self.threshold:
             return []
+        metadata = {"model": self.model_id, "label": label}
+        if self.revision is not None:
+            metadata["revision"] = self.revision
         return [
             Threat(
                 category=ThreatCategory.PROMPT_INJECTION,
@@ -214,6 +252,6 @@ class TransformerDetector(Detector):
                 score=attack_prob,
                 detector=self.name,
                 message=f"ML classifier flagged prompt injection (p={attack_prob:.2f}, model={self.model_id}).",
-                metadata={"model": self.model_id, "label": label},
+                metadata=metadata,
             )
         ]

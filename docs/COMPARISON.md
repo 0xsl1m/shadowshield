@@ -131,9 +131,11 @@ regression tests** (94 tests total, mypy-strict, ruff-clean):
 **Ready now** for: synchronous *or* multi-threaded/async deployments using the
 deterministic tiers + canary + PII + tool-call guarding + LLM/alignment judges.
 
-**Before relying on the ML classifier in production:** run the gated real-model
-test in your CI (`SHADOWSHIELD_RUN_MODEL_TESTS=1` with `[transformers]`) — its
-*logic* is covered, but the live model has not been exercised in this repo's CI.
+**Before relying on the ML classifier in production:** require the real-model CI
+job. The public ProtectAI classifier runs on every CI build; the repository-owned
+credentialed path additionally loads the pinned Meta multilingual model, exercises
+German, Spanish, French, and Hindi attack/benign pairs, and publishes a full
+deepset benchmark in the job log. Fork pull requests never receive the token.
 
 **Still recommended before a 1.0 / PyPI release:** an externally-validated
 benchmark number (AgentDojo/PINT), a CI run on a real runner, and audit-log
@@ -154,7 +156,9 @@ rotation. None are blockers for an internal/self-hosted deployment.
 - **Published AgentDojo / InjecAgent numbers.** The adapter is built and tested;
   running the suite needs an LLM API key. The ASR-at-fixed-utility figure is the
   next milestone. *(highest priority)*
-- **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
-  requires a HuggingFace license/login to benchmark.
+- **Gated multilingual model number.** The pinned 86M mDeBERTa preset is wired;
+  its measured deepset result remains pending until the credentialed CI gate
+  completes. The faster 22M DeBERTa-xsmall option is not presented as equivalent
+  multilingual coverage.
 - **Richer attack corpus + tuned vector threshold** to push the vector tier's
   contribution beyond the current conservative +1.7pp.

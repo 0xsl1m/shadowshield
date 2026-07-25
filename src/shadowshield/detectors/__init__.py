@@ -32,7 +32,14 @@ from .prompt_injection import PromptInjectionDetector
 # auto-registered — they pull models, so they're opt-in (via extra_detectors or
 # the Shield use_transformer= / use_vectors= flags).
 from .transformer import DEFAULT_MODEL as DEFAULT_TRANSFORMER_MODEL
-from .transformer import TransformerDetector
+from .transformer import (
+    FAST_META_MODEL,
+    FAST_META_MODEL_REVISION,
+    MULTILINGUAL_MODEL,
+    MULTILINGUAL_MODEL_ALIAS,
+    MULTILINGUAL_MODEL_REVISION,
+    TransformerDetector,
+)
 from .vector import DEFAULT_EMBED_MODEL, VectorSimilarityDetector
 
 __all__ = [
@@ -54,6 +61,11 @@ __all__ = [
     # opt-in model-backed detectors
     "TransformerDetector",
     "DEFAULT_TRANSFORMER_MODEL",
+    "MULTILINGUAL_MODEL_ALIAS",
+    "MULTILINGUAL_MODEL",
+    "MULTILINGUAL_MODEL_REVISION",
+    "FAST_META_MODEL",
+    "FAST_META_MODEL_REVISION",
     "VectorSimilarityDetector",
     "DEFAULT_EMBED_MODEL",
     # llm-check helpers
