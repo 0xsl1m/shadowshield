@@ -49,12 +49,22 @@ _OVERRIDE_SIGNATURES: tuple[Signature, ...] = (
         r"\b(?:ignore|disregard|forget|override|bypass|skip|drop)\b[\w\s,'’]{0,40}?"
         r"\b(?:previous|prior|above|earlier|all|the|your|any|those|these|"
         r"system|current|existing|original)\b[\w\s,'’]{0,20}?"
-        r"\b(?:instruction|instructions|prompt|prompts|rule|rules|context|message|"
+        r"\b(?:instruction|instructions|prompt|prompts|rule|rules|context|"
         r"guideline|guidelines|directive|directives|policy|persona|constraint|constraints)\b",
         ThreatCategory.PROMPT_INJECTION,
         Severity.HIGH,
         0.9,
         "Instruction-override attempt ('ignore/disregard previous instructions').",
+    ),
+    _sig(
+        r"\b(?:ignore|disregard|forget|override|bypass|skip|drop)\b"
+        r"(?:\s+(?:all|any|the|your))?"
+        r"(?:\s+(?:previous|prior|above|current))?"
+        r"\s+(?:system|developer)\s+message\b",
+        ThreatCategory.PROMPT_INJECTION,
+        Severity.HIGH,
+        0.9,
+        "Instruction-override attempt targeting a system/developer message.",
     ),
     _sig(
         r"\b(?:ignore|disregard|forget)\b[\w\s,'’]{0,15}?\b(?:everything|all)\b"
@@ -165,6 +175,18 @@ _FAKE_FRAME_SIGNATURES: tuple[Signature, ...] = (
         Severity.HIGH,
         0.75,
         "Chat-template special token injected as content.",
+    ),
+    _sig(
+        r"(?<![`'\"])\bend\s+(?:of\s+)?(?:user|assistant)"
+        r"(?:\s+(?:message|turn))?\b[^\w\r\n]{1,24}"
+        r"\b(?:system|developer|admin)\s*[:：]\s*"
+        r"(?:you\s+(?:must|will|should)\b|ignore\b|disregard\b|override\b|"
+        r"grant\b|enable\b|disable\b|reveal\b|print\b|output\b|execute\b|"
+        r"run\b|comply\b|follow\b)",
+        ThreatCategory.DELIMITER_ATTACK,
+        Severity.HIGH,
+        0.82,
+        "Fake end-role/authority-role transition carrying an imperative.",
     ),
 )
 

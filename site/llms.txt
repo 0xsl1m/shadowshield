@@ -14,6 +14,8 @@ ShadowShield guards model **input** (user prompts, retrieved docs, tool results)
 - Core dependencies are deliberately small (pydantic, structlog, pyyaml, httpx, tiktoken); ML, vectors, Presidio PII, dataset loaders, and the dashboard are optional extras.
 - External benchmark (deepset/prompt-injections, test split, n=116): regex-only 18.3% recall, +multilingual signatures 23.3%, +vector similarity 25.0%, +DeBERTa classifier 48.3% — all at 0% false-positive rate and 100% precision.
 - Bundled offline benchmark is a 100%/0-FP regression baseline (smoke test), NOT a SOTA claim.
+- Frozen blind semantic snapshots remain difficult: v1 is 26.7% recall / 13.3% FPR and v2 is 0% / 10%; their SHA-256s and isolation protocol are published.
+- Production durable policy state requires a fourth independent `SHADOWSHIELD_POLICY_STATE_KEY`; 0.6.0 volumes must run the offline `migrate-policy-state` command before startup.
 
 ## Documentation
 

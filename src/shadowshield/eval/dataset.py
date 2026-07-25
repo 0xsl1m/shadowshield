@@ -42,14 +42,28 @@ def load_builtin() -> list[EvalExample]:
 
 
 def load_adversarial() -> list[EvalExample]:
-    """A harder bundled set: obfuscated/multilingual/indirect attacks + tricky hard negatives.
-
-    Deliberately includes attacks the regex/signature tier alone may miss (so recall is
-    *not* 100% on the core install) and benign text laden with trigger words. Use it to
-    publish honest numbers, not a marketing 100%.
-    """
+    """A curated regression set with obfuscated attacks and tricky hard negatives."""
     data = resources.files("shadowshield.eval.data").joinpath("adversarial_benchmark.jsonl")
     return _parse_jsonl(data.read_text(encoding="utf-8").splitlines())
+
+
+def load_generalization(snapshot: str = "v2") -> list[EvalExample]:
+    """Load an independently authored blind generalization snapshot.
+
+    ``v1`` and ``v2`` were authored without access to detector signatures. Use
+    ``all`` to concatenate both snapshots. These sets expose semantic coverage
+    gaps and should not be presented as training or in-distribution accuracy.
+    """
+    if snapshot not in {"v1", "v2", "all"}:
+        raise ValueError("snapshot must be one of: v1, v2, all")
+    versions = ("v1", "v2") if snapshot == "all" else (snapshot,)
+    examples: list[EvalExample] = []
+    for version in versions:
+        data = resources.files("shadowshield.eval.data").joinpath(
+            f"generalization_benchmark_{version}.jsonl"
+        )
+        examples.extend(_parse_jsonl(data.read_text(encoding="utf-8").splitlines()))
+    return examples
 
 
 def load_jsonl(

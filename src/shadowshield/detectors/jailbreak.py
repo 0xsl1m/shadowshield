@@ -15,26 +15,45 @@ from .base import Detector, ScanContext, locate_span, register_detector
 
 _PATTERNS: tuple[tuple[str, Severity, float, str], ...] = (
     (
-        r"\b(?:DAN|STAN|DUDE|AIM)\b.{0,40}?\b(?:mode|prompt|jailbreak)\b",
+        r"\b(?:activate|enable|enter|switch to|turn on|unlock)\b[\w\s]{0,12}?"
+        r"\b(?-i:DAN|STAN|DUDE|AIM)\s+(?:mode|prompt|jailbreak)\b",
         Severity.HIGH,
         0.8,
-        "Named jailbreak persona (DAN/STAN/…).",
+        "Activated named jailbreak persona.",
     ),
     (
-        # Require an activating verb / AI-unlock context so benign app text like
-        # "my developer mode toggle in settings" doesn't false-positive.
-        r"\b(?:enable|enter|activate|switch to|turn on|unlock|you are in|into)\b"
-        r"[\w\s]{0,15}?\b(?:developer|debug|god|sudo|root|dan|jailbreak)\s+mode\b",
+        r"\b(?:respond|act|behave|answer)\s+as\s+(?-i:DAN|STAN|DUDE|AIM)\b"
+        r".{0,60}?\b(?:"
+        r"(?:(?:has\s+)?broken\s+free\s+of|freed\s+from)"
+        r"\s+(?:(?:all|every)\s+)?(?:safety\s+)?"
+        r"(?:restrictions?|rules?|filters?|limits?|guidelines?)|"
+        r"no\s+longer\s+(?:bound|restricted|constrained)\s+by\s+(?:any\s+)?"
+        r"(?:rules?|filters?|limits?|guidelines?|restrictions?))\b",
         Severity.HIGH,
-        0.75,
-        "Privileged 'mode' unlock attempt.",
+        0.8,
+        "Named jailbreak persona assigned with explicit freedom from restrictions.",
     ),
     (
-        r"\b(?:developer|debug|god|sudo|root|dan)\s+mode\b[\w\s]{0,20}?"
-        r"\b(?:bypass|no restrictions?|no filters?|unlock|enabled|without limits?|anything)\b",
+        r"(?:\byou\s+(?:are\s+(?:now\s+)?in|"
+        r"(?:must|should|will)\s+(?:now\s+)?"
+        r"(?:enable|enter|activate|switch to|turn on|unlock))\s+"
+        r"(?:developer|debug|god|sudo|root|dan|jailbreak)\s+mode\b|"
+        r"\b(?:enable|enter|activate|switch to|turn on|unlock)\s+"
+        r"(?:ai|model|assistant)\s+(?:developer|debug|root|admin)\s+mode\b)",
         Severity.HIGH,
         0.75,
-        "Privileged 'mode' framed as removing restrictions.",
+        "Model-directed privileged 'mode' unlock attempt.",
+    ),
+    (
+        r"\b(?:enable|enter|activate|switch to|turn on|unlock)\b[\w\s]{0,15}?"
+        r"\b(?:developer|debug|god|sudo|root|dan)\s+mode\b"
+        r"(?![\w\s,.;:]{0,40}\b(?:must|should|does|can|will)\s+not\b)"
+        r"[\w\s,.;:]{0,60}?\b(?:bypass|disable|remove|ignore)\b"
+        r"[\w\s]{0,15}?\b(?:(?:safety|content|moderation)\s+)?"
+        r"(?:filters?|rules?|restrictions?|limits?)\b",
+        Severity.HIGH,
+        0.78,
+        "Privileged mode activation paired with restriction removal.",
     ),
     (
         r"\b(?:do anything now|no longer (?:bound|restricted)|without (?:any )?(?:restrictions?|filters?|guidelines?|rules?))\b",

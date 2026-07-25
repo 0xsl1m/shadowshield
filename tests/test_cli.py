@@ -6,6 +6,8 @@ import contextlib
 import io
 import json
 
+import pytest
+
 from shadowshield.cli import main
 
 
@@ -46,3 +48,60 @@ def test_owasp_command_text_and_json() -> None:
     assert by_id["LLM01"]["status"] == "covered"
     assert "prompt_injection (+ multilingual)" in by_id["LLM01"]["mechanisms"]
     assert by_id["LLM03"]["status"] == "out_of_scope"
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        ["--adversarial", "--generalization", "v2"],
+        ["--dataset", "local.jsonl", "--hf", "owner/dataset"],
+    ],
+)
+def test_benchmark_dataset_selectors_are_mutually_exclusive(selectors) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["benchmark", *selectors])
+    assert exc.value.code == 2
+
+
+def test_serve_control_forwards_independent_policy_state_key(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_serve_control(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("shadowshield.control.serve_control", fake_serve_control)
+    state_key = "s" * 32
+    rc, _ = _run(
+        [
+            "serve",
+            "--control",
+            "--policy-state-path",
+            "policy-state.json",
+            "--policy-state-key",
+            state_key,
+        ]
+    )
+
+    assert rc == 0
+    assert captured["policy_state_key"] == state_key
+
+
+def test_migrate_policy_state_uses_environment_keys(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    backup = tmp_path / "state.json.pre-0.6.1.bak"
+
+    def fake_migrate(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return backup
+
+    monkeypatch.setattr("shadowshield.control.migrate_policy_state", fake_migrate)
+    monkeypatch.setenv("SHADOWSHIELD_POLICY_KEY", "p" * 32)
+    monkeypatch.setenv("SHADOWSHIELD_POLICY_STATE_KEY", "s" * 32)
+
+    rc, out = _run(["migrate-policy-state", "--path", str(tmp_path / "state.json")])
+
+    assert rc == 0
+    assert captured["old_key"] == "p" * 32
+    assert captured["new_key"] == "s" * 32
+    assert "verified backup" in out

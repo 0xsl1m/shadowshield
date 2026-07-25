@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 
@@ -87,7 +88,14 @@ def _cmd_owasp(args: argparse.Namespace) -> int:
 
 
 def _cmd_benchmark(args: argparse.Namespace) -> int:
-    from .eval import evaluate_shield, load_adversarial, load_builtin, load_csv, load_jsonl
+    from .eval import (
+        evaluate_shield,
+        load_adversarial,
+        load_builtin,
+        load_csv,
+        load_generalization,
+        load_jsonl,
+    )
 
     if args.dataset:
         loader = load_csv if args.dataset.lower().endswith(".csv") else load_jsonl
@@ -98,6 +106,8 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         examples = load_huggingface(args.hf, split=args.split)
     elif args.adversarial:
         examples = load_adversarial()
+    elif args.generalization:
+        examples = load_generalization(args.generalization)
     else:
         examples = load_builtin()
 
@@ -110,7 +120,12 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        src = args.dataset or args.hf or ("adversarial" if args.adversarial else "builtin")
+        src = (
+            args.dataset
+            or args.hf
+            or ("adversarial" if args.adversarial else None)
+            or (f"generalization-{args.generalization}" if args.generalization else "builtin")
+        )
         print(f"dataset: {src}   mode: {args.mode}")
         print(report.format_text())
     return 0
@@ -132,6 +147,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             cors_origins=args.cors_origin,
             policy_key=args.policy_key,
             policy_state_path=args.policy_state_path,
+            policy_state_key=args.policy_state_key,
         )
         return 0
 
@@ -145,6 +161,33 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         api_keys=args.api_key,
         cors_origins=args.cors_origin,
     )
+    return 0
+
+
+def _cmd_migrate_policy_state(args: argparse.Namespace) -> int:
+    from .control import migrate_policy_state
+
+    old_key = args.old_key or os.environ.get("SHADOWSHIELD_POLICY_KEY")
+    new_key = args.new_key or os.environ.get("SHADOWSHIELD_POLICY_STATE_KEY")
+    if not old_key or not new_key:
+        print(
+            "error: migration requires the old policy key and new state key; "
+            "prefer SHADOWSHIELD_POLICY_KEY and SHADOWSHIELD_POLICY_STATE_KEY",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        backup = migrate_policy_state(
+            args.path,
+            old_key=old_key,
+            new_key=new_key,
+            backup_path=args.backup,
+        )
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"migrated policy state: {args.path}")
+    print(f"verified backup: {backup}")
     return 0
 
 
@@ -183,14 +226,25 @@ def build_parser() -> argparse.ArgumentParser:
     owasp.set_defaults(func=_cmd_owasp)
 
     bench = sub.add_parser("benchmark", help="benchmark detection quality + latency")
-    bench.add_argument(
+    dataset_source = bench.add_mutually_exclusive_group()
+    dataset_source.add_argument(
         "--dataset", default=None, help="path to a JSONL/CSV dataset (default: bundled benchmark)"
     )
-    bench.add_argument("--hf", default=None, help="HuggingFace dataset id (needs 'datasets')")
-    bench.add_argument(
+    dataset_source.add_argument(
+        "--hf",
+        default=None,
+        help="HuggingFace dataset id (needs 'datasets')",
+    )
+    dataset_source.add_argument(
         "--adversarial",
         action="store_true",
-        help="use the harder bundled adversarial set (honest, sub-100%% numbers)",
+        help="use the curated adversarial regression set",
+    )
+    dataset_source.add_argument(
+        "--generalization",
+        choices=["v1", "v2", "all"],
+        default=None,
+        help="use an independently authored blind semantic snapshot",
     )
     bench.add_argument("--split", default="test", help="HF split (default: test)")
     bench.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
@@ -203,6 +257,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bench.add_argument("--json", action="store_true", help="emit JSON")
     bench.set_defaults(func=_cmd_benchmark)
+
+    migrate = sub.add_parser(
+        "migrate-policy-state",
+        help="offline re-key of a stopped 0.6.0 durable policy-state file",
+    )
+    migrate.add_argument("--path", required=True, metavar="PATH")
+    migrate.add_argument(
+        "--backup",
+        default=None,
+        metavar="PATH",
+        help="exclusive backup path (default: PATH.pre-0.6.1.bak)",
+    )
+    migrate.add_argument(
+        "--old-key",
+        default=None,
+        metavar="KEY",
+        help="legacy state key; prefer SHADOWSHIELD_POLICY_KEY to avoid shell history",
+    )
+    migrate.add_argument(
+        "--new-key",
+        default=None,
+        metavar="KEY",
+        help="new 32+ byte key; prefer SHADOWSHIELD_POLICY_STATE_KEY",
+    )
+    migrate.set_defaults(func=_cmd_migrate_policy_state)
 
     serve_p = sub.add_parser("serve", help="run the HTTP server + dashboard")
     serve_p.add_argument("--host", default="127.0.0.1")
@@ -253,6 +332,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "durable policy anti-replay state file (control mode). "
             "Also SHADOWSHIELD_POLICY_STATE_PATH"
+        ),
+    )
+    serve_p.add_argument(
+        "--policy-state-key",
+        default=None,
+        metavar="KEY",
+        help=(
+            "independent HMAC key (at least 32 bytes) for durable policy state "
+            "(control mode). Also SHADOWSHIELD_POLICY_STATE_KEY. Existing state "
+            "authenticated with the policy signing key is not auto-migrated"
         ),
     )
     serve_p.set_defaults(func=_cmd_serve)

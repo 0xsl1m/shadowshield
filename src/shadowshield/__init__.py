@@ -71,7 +71,7 @@ from .plugins import PluginManager, ShadowShieldPlugin
 from .reporter import Reporter, attach_reporter
 from .responders import Responder, spotlight
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 __all__ = [
     "__version__",

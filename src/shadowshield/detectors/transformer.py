@@ -19,6 +19,7 @@ model, or your own fine-tune without touching code.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
@@ -63,29 +64,47 @@ class TransformerDetector(Detector):
         self.max_length = max_length
         self.device = device
         self._pipeline: Any | None = None
+        self._load_lock = threading.Lock()
         if not lazy:
             self._ensure_pipeline()
 
     def _ensure_pipeline(self) -> Any:
         if self._pipeline is not None:
             return self._pipeline
-        try:
-            from transformers import pipeline
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "TransformerDetector requires the 'transformers' extra: "
-                "pip install shadowshield[transformers]"
-            ) from exc
-        kwargs: dict[str, Any] = {
-            "task": "text-classification",
-            "model": self.model_id,
-            "truncation": True,
-            "max_length": self.max_length,
-        }
-        if self.device is not None:
-            kwargs["device"] = self.device
-        self._pipeline = pipeline(**kwargs)
-        return self._pipeline
+        with self._load_lock:
+            # Loading a model is expensive and may allocate scarce GPU memory.
+            # Re-check after taking the lock so concurrent first scans share one
+            # initialized pipeline.
+            if self._pipeline is not None:
+                return self._pipeline
+            try:
+                from transformers import pipeline
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise ImportError(
+                    "TransformerDetector requires the 'transformers' extra: "
+                    "pip install shadowshield[transformers]"
+                ) from exc
+            kwargs: dict[str, Any] = {
+                "task": "text-classification",
+                "model": self.model_id,
+                "truncation": True,
+                "max_length": self.max_length,
+            }
+            if self.device is not None:
+                kwargs["device"] = self.device
+            loaded = pipeline(**kwargs)
+            # Publish only after construction succeeds. A failed load leaves the
+            # detector uninitialized so a later scan can retry.
+            self._pipeline = loaded
+            return loaded
+
+    def warmup(self) -> None:
+        """Load the classifier explicitly for fail-fast startup."""
+        self._ensure_pipeline()
+
+    def is_ready(self) -> bool:
+        """Report whether the classifier is loaded without triggering a load."""
+        return self._pipeline is not None
 
     def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
         if not text.strip():

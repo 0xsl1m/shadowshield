@@ -20,6 +20,8 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from math import isfinite
+from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 from .core.telemetry import TelemetryEvent, to_telemetry
@@ -30,9 +32,17 @@ if TYPE_CHECKING:
 
 Transport = Callable[[list[dict[str, Any]]], None]
 
+_MAX_RETRIES = 3
+_MAX_RETRY_BACKOFF = 1.0
+
 
 class Reporter:
-    """Bounded, batched, non-blocking telemetry sender."""
+    """Bounded, batched, non-blocking telemetry sender.
+
+    Optional retries are immediate and bounded. A transport that accepts a batch
+    and then raises may cause that batch to be delivered more than once, so
+    collectors should tolerate at-least-once delivery when retries are enabled.
+    """
 
     def __init__(
         self,
@@ -43,6 +53,8 @@ class Reporter:
         sample_rate: float = 1.0,
         max_batch: int = 200,
         queue_max: int = 10_000,
+        max_retries: int = 0,
+        retry_backoff: float = 0.1,
         include_text_hash: bool = False,
         transport: Transport | None = None,
     ) -> None:
@@ -50,14 +62,34 @@ class Reporter:
             raise ValueError("max_batch must be greater than zero")
         if queue_max <= 0:
             raise ValueError("queue_max must be greater than zero")
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)
+            or not 0 <= max_retries <= _MAX_RETRIES
+        ):
+            raise ValueError(f"max_retries must be an integer between 0 and {_MAX_RETRIES}")
+        if isinstance(retry_backoff, bool) or not isinstance(retry_backoff, (int, float)):
+            raise ValueError("retry_backoff must be a finite non-negative number")
+        try:
+            normalized_retry_backoff = float(retry_backoff)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("retry_backoff must be a finite non-negative number") from exc
+        if not isfinite(normalized_retry_backoff) or normalized_retry_backoff < 0:
+            raise ValueError("retry_backoff must be a finite non-negative number")
         self.endpoint = endpoint
         self.api_key = api_key
         self.tenant_salt = tenant_salt
         self.sample_rate = max(0.0, min(1.0, sample_rate))
         self.max_batch = max_batch
+        self.max_retries = max_retries
+        self.retry_backoff = normalized_retry_backoff
         self.include_text_hash = include_text_hash
         self._q: deque[TelemetryEvent] = deque(maxlen=queue_max)
         self._lock = threading.Lock()
+        self._record_done = threading.Condition(self._lock)
+        self._flush_lock = threading.Lock()
+        self._closed = False
+        self._records_in_flight = 0
         self._dropped = 0
         self._sent = 0
         self._transport = transport or self._http_transport
@@ -68,50 +100,117 @@ class Reporter:
     # -- enqueue -------------------------------------------------------- #
     def record(self, result: Any, *, latency_ms: float = 0.0, identity: str | None = None) -> None:
         """Map a ScanResult to a content-free event and enqueue it (non-blocking)."""
-        if self.sample_rate <= 0.0:
-            return
-        # Deterministic fractional accumulator: over N records this selects
-        # floor(N * sample_rate), without the reciprocal-rounding bias.
-        if self.sample_rate < 1.0:
-            with self._lock:
+        with self._lock:
+            if self._closed or self.sample_rate <= 0.0:
+                return
+            # Deterministic fractional accumulator: over N records this selects
+            # floor(N * sample_rate), without the reciprocal-rounding bias.
+            if self.sample_rate < 1.0:
                 self._sample_credit += self._sample_units
                 if self._sample_credit < self._sample_scale:
                     return
                 self._sample_credit -= self._sample_scale
-        event = to_telemetry(
-            result,
-            ts=time.time(),
-            latency_ms=latency_ms,
-            identity=identity,
-            tenant_salt=self.tenant_salt,
-            include_text_hash=self.include_text_hash,
-        )
-        with self._lock:
-            if len(self._q) == self._q.maxlen:
-                self._dropped += 1
-            self._q.append(event)
+            self._records_in_flight += 1
+
+        event: TelemetryEvent | None = None
+        try:
+            event = to_telemetry(
+                result,
+                ts=time.time(),
+                latency_ms=latency_ms,
+                identity=identity,
+                tenant_salt=self.tenant_salt,
+                include_text_hash=self.include_text_hash,
+            )
+        finally:
+            with self._record_done:
+                if event is None:
+                    self._dropped += 1
+                else:
+                    if len(self._q) == self._q.maxlen:
+                        self._dropped += 1
+                    self._q.append(event)
+                self._records_in_flight -= 1
+                self._record_done.notify_all()
 
     # -- flush ---------------------------------------------------------- #
     def flush(self) -> int:
-        """Send queued events in batches. Returns the count sent. Never raises."""
-        sent = 0
-        while True:
+        """Send a finite queue snapshot. Returns the count sent. Never raises.
+
+        Events recorded after this call takes its snapshot remain queued for the
+        next flush, so a continuously active producer cannot make one call run
+        forever. Concurrent flushes are serialized.
+        """
+        with self._flush_lock:
             with self._lock:
-                if not self._q:
-                    break
-                batch = [self._q.popleft() for _ in range(min(self.max_batch, len(self._q)))]
+                if self._closed:
+                    return 0
+                snapshot = list(self._q)
+                self._q.clear()
+            return self._flush_snapshot(snapshot)
+
+    def _flush_snapshot(self, snapshot: list[TelemetryEvent]) -> int:
+        """Flush an immutable entry snapshot with ``_flush_lock`` held."""
+        sent = 0
+        for offset in range(0, len(snapshot), self.max_batch):
+            batch = snapshot[offset : offset + self.max_batch]
             payload = [e.to_dict() for e in batch]
-            try:
-                self._transport(payload)
-            except Exception:
-                # Fail-open: drop the batch rather than block/crash the caller.
+            if not self._deliver(payload):
+                # Fail-open: account for this batch and the unsent snapshot tail.
                 with self._lock:
-                    self._dropped += len(batch)
+                    self._dropped += len(snapshot) - offset
                 break
             sent += len(payload)
             with self._lock:
                 self._sent += len(payload)
         return sent
+
+    def _deliver(self, payload: list[dict[str, Any]]) -> bool:
+        for attempt in range(self.max_retries + 1):
+            try:
+                self._transport(payload)
+            except Exception:
+                if attempt == self.max_retries:
+                    return False
+                delay = min(self.retry_backoff * (2**attempt), _MAX_RETRY_BACKOFF)
+                if delay:
+                    time.sleep(delay)
+            else:
+                return True
+        return False  # pragma: no cover - loop always returns
+
+    def close(self) -> int:
+        """Stop accepting events, flush the current queue, and drop any unsent.
+
+        Returns the number delivered by this call. The operation is idempotent;
+        after it returns, the queue is empty and :meth:`record` is a no-op.
+        """
+        with self._flush_lock:
+            with self._record_done:
+                if self._closed:
+                    return 0
+                self._closed = True
+                while self._records_in_flight:
+                    self._record_done.wait()
+                snapshot = list(self._q)
+                self._q.clear()
+            return self._flush_snapshot(snapshot)
+
+    def __enter__(self) -> Reporter:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    @property
+    def closed(self) -> bool:
+        with self._lock:
+            return self._closed
 
     @property
     def stats(self) -> dict[str, int]:

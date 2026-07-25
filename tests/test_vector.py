@@ -10,6 +10,11 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -38,6 +43,7 @@ def _mock_detector(corpus, threshold=0.72) -> VectorSimilarityDetector:
     det = VectorSimilarityDetector(threshold=threshold, corpus=list(corpus), lazy=True)
     det._model = _MockEmbedder()
     det._corpus_emb = det._model.encode(det._corpus)
+    det._ready.set()
     return det
 
 
@@ -85,6 +91,23 @@ def test_bundled_corpus_loads() -> None:
     assert any("ignore" in c.lower() for c in det._corpus)
 
 
+def test_custom_corpus_is_copied() -> None:
+    corpus = ["known attack"]
+    det = VectorSimilarityDetector(corpus=corpus, lazy=True)
+
+    corpus.append("caller-side mutation")
+
+    assert det._corpus == ["known attack"]
+
+
+def test_vector_readiness_tracks_atomic_index_publication() -> None:
+    lazy = VectorSimilarityDetector(corpus=["known attack"], lazy=True)
+    assert lazy.is_ready() is False
+
+    det = _mock_detector(["one", "two"])
+    assert det.is_ready() is True
+
+
 # --------------------------------------------------------------------------- #
 # Self-hardening
 # --------------------------------------------------------------------------- #
@@ -111,6 +134,157 @@ def test_shield_harden_routes_to_vector_detector() -> None:
 def test_shield_harden_noop_without_vector_detector() -> None:
     shield = ss.Shield.for_mode("balanced")
     assert shield.harden("anything") is False
+
+
+# --------------------------------------------------------------------------- #
+# Concurrent initialization and mutation
+# --------------------------------------------------------------------------- #
+def test_concurrent_first_load_builds_one_complete_index(monkeypatch) -> None:
+    workers = 16
+    start = threading.Barrier(workers)
+    calls_lock = threading.Lock()
+    constructor_calls = 0
+    encode_calls = 0
+
+    class CountingEmbedder(_MockEmbedder):
+        def __init__(self, _model_id):
+            nonlocal constructor_calls
+            with calls_lock:
+                constructor_calls += 1
+
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            nonlocal encode_calls
+            with calls_lock:
+                encode_calls += 1
+            time.sleep(0.02)
+            return super().encode(texts, normalize_embeddings, show_progress_bar)
+
+    fake_module = ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = CountingEmbedder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    det = VectorSimilarityDetector(corpus=["one", "two"], lazy=True)
+
+    def load():
+        start.wait()
+        return det._ensure_index()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        models = list(pool.map(lambda _index: load(), range(workers)))
+
+    assert constructor_calls == 1
+    assert encode_calls == 1
+    assert len({id(model) for model in models}) == 1
+    assert det._corpus_emb.shape[0] == len(det._corpus) == 2
+
+
+def test_readiness_does_not_wait_for_index_loading(monkeypatch) -> None:
+    load_started = threading.Event()
+    release_load = threading.Event()
+
+    class BlockingEmbedder(_MockEmbedder):
+        def __init__(self, _model_id):
+            pass
+
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            load_started.set()
+            assert release_load.wait(timeout=5)
+            return super().encode(texts, normalize_embeddings, show_progress_bar)
+
+    fake_module = ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = BlockingEmbedder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    det = VectorSimilarityDetector(corpus=["known attack"], lazy=True)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        loading = pool.submit(det._ensure_index)
+        assert load_started.wait(timeout=2)
+        readiness = pool.submit(det.is_ready)
+        try:
+            assert readiness.result(timeout=2) is False
+        finally:
+            release_load.set()
+        loading.result(timeout=2)
+
+    assert det.is_ready() is True
+
+
+def test_failed_index_build_leaves_no_partial_state_and_can_retry(monkeypatch) -> None:
+    encode_calls = 0
+
+    class FlakyEmbedder(_MockEmbedder):
+        def __init__(self, _model_id):
+            pass
+
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            nonlocal encode_calls
+            encode_calls += 1
+            if encode_calls == 1:
+                raise RuntimeError("temporary corpus encoding failure")
+            return super().encode(texts, normalize_embeddings, show_progress_bar)
+
+    fake_module = ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = FlakyEmbedder  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    det = VectorSimilarityDetector(corpus=["known attack"], lazy=True)
+
+    with pytest.raises(RuntimeError, match="temporary corpus encoding failure"):
+        det._ensure_index()
+    assert det._model is None
+    assert det._corpus_emb is None
+
+    model = det._ensure_index()
+    assert model is det._model
+    assert det._corpus_emb.shape[0] == 1
+    assert encode_calls == 2
+
+
+def test_concurrent_add_attack_preserves_every_corpus_row() -> None:
+    attacks = [f"attack-{index}" for index in range(50)]
+    start = threading.Barrier(len(attacks))
+
+    class CoordinatedEmbedder(_MockEmbedder):
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            if len(texts) == 1 and texts[0].startswith("attack-"):
+                start.wait(timeout=5)
+            return super().encode(texts, normalize_embeddings, show_progress_bar)
+
+    det = _mock_detector(["baseline"])
+    det._model = CoordinatedEmbedder()
+
+    with ThreadPoolExecutor(max_workers=len(attacks)) as pool:
+        list(pool.map(det.add_attack, attacks))
+
+    assert len(det._corpus) == len(attacks) + 1
+    assert det._corpus_emb.shape[0] == len(det._corpus)
+    assert set(det._corpus[1:]) == set(attacks)
+
+
+def test_scan_does_not_hold_index_lock_during_model_inference() -> None:
+    query_started = threading.Event()
+    release_query = threading.Event()
+
+    class BlockingEmbedder(_MockEmbedder):
+        def encode(self, texts, normalize_embeddings=True, show_progress_bar=False):
+            if texts == ["scan payload"]:
+                query_started.set()
+                assert release_query.wait(timeout=5)
+            return super().encode(texts, normalize_embeddings, show_progress_bar)
+
+    det = _mock_detector(["baseline"])
+    det._model = BlockingEmbedder()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        scan = pool.submit(det.scan, "scan payload", context=_ctx("scan payload"))
+        assert query_started.wait(timeout=2)
+        harden = pool.submit(det.add_attack, "new confirmed attack")
+        try:
+            harden.result(timeout=2)
+        finally:
+            release_query.set()
+        scan.result(timeout=2)
+
+    assert det._corpus[-1] == "new confirmed attack"
+    assert det._corpus_emb.shape[0] == len(det._corpus)
 
 
 # --------------------------------------------------------------------------- #

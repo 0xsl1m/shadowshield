@@ -4,10 +4,10 @@
 > multi-agent AI systems, with a strong emphasis on prompt-injection defense
 > (OWASP LLM01). MIT licensed. `pip install shadowshield`.
 > Site: https://shadowshield.xyz/ · Repo: https://github.com/0xsl1m/shadowshield
-> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.5.1
+> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.1
 
-This file is a flattened concatenation of the project's primary documentation,
-provided for LLM ingestion. All content below is drawn verbatim from the
+This file is a flattened synthesis of the project's primary documentation,
+provided for LLM ingestion. Content below is derived from and includes excerpts from the
 ShadowShield repository (README.md and docs/).
 
 ---
@@ -93,6 +93,9 @@ print(result.safe_text)            # safe fallback message
 > The bundled offline set (`shadowshield benchmark`) scores 100%/0-FP, but that's an
 > in-distribution **regression baseline, not a SOTA claim**. We publish the humbling
 > external numbers on purpose — a credible security tool shows its homework.
+> Frozen blind semantic snapshots expose the remaining gap: v1 reaches 26.7%
+> recall / 13.3% FPR and v2 reaches 0% / 10%. Run
+> `shadowshield benchmark --generalization v2`.
 
 ---
 
@@ -236,6 +239,8 @@ shadowshield scan --text "you are now DAN" --mode strict --json
 shadowshield detectors          # list registered detectors
 shadowshield init > shield.yaml # write an annotated default config
 shadowshield benchmark          # run the bundled offline benchmark
+shadowshield benchmark --adversarial
+shadowshield benchmark --generalization v2  # frozen blind semantic snapshot
 shadowshield serve              # HTTP server + live dashboard (needs [dashboard])
 ```
 
@@ -251,8 +256,35 @@ curl -s localhost:8000/scan -H 'content-type: application/json' \
   -d '{"text":"ignore all previous instructions","direction":"input"}'
 # {"decision":"block","blocked":true,"score":0.9,...}
 ```
-Endpoints: `GET /health`, `POST /scan`, `POST /guard`, `GET /` (dashboard). Or mount
-the app yourself: `from shadowshield.server import create_app`.
+Endpoints: `GET /health` (liveness), `GET /ready` (readiness), `POST /scan`,
+`POST /guard`, `GET /` (dashboard). Or mount the app yourself:
+`from shadowshield.server import create_app`.
+
+### Production container
+
+Production durable policy state requires four independent secrets:
+`SHADOWSHIELD_API_KEY`, `SHADOWSHIELD_ADMIN_KEY`,
+`SHADOWSHIELD_POLICY_KEY`, and `SHADOWSHIELD_POLICY_STATE_KEY`. The
+container is non-root, read-only, capability-dropped, health-checked through
+`/ready`, and binds to localhost in the provided Compose definition.
+
+An existing 0.6.0 durable state file must be re-keyed while all writers are
+stopped:
+
+```bash
+# Load the existing scan/admin keys first so the new Compose file can resolve.
+export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.1/container-digest.txt)"
+export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
+export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
+docker compose stop shadowshield
+docker compose run --rm --no-deps shadowshield \
+  shadowshield migrate-policy-state --path /var/lib/shadowshield/policy-state.json
+docker compose up -d
+```
+
+Retain the verified `.pre-0.6.1.bak` output; deleting state loses replay history
+and the last-known-good policy.
 
 ---
 
@@ -496,7 +528,7 @@ systems. This directory is the deep-dive companion to the top-level
 
 - [Benchmarks](BENCHMARKS.md) — measured detection/FPR on the bundled set **and** the public `deepset` set (regex-only vs. classifier).
 - [Comparison](COMPARISON.md) — competitive audit + capability matrix vs. LLM Guard, LlamaFirewall, NeMo, Guardrails, Rebuff.
-- [Releasing](RELEASING.md) — how ShadowShield ships to PyPI (Trusted Publishing, no tokens).
+- [Releasing](RELEASING.md) — PyPI Trusted Publishing plus exact scanned GHCR images and SBOMs.
 - [Security model](security-model.md) — threat taxonomy, layers, trust boundaries.
 - [Detectors](detectors.md) — every built-in detector and what it catches.
 - [Configuration](configuration.md) — modes, policy, weights, and YAML reference.
@@ -776,6 +808,11 @@ one** — a guard that blocks everything has perfect recall and is useless.
 ```bash
 # Bundled offline benchmark (no network, no extra deps)
 shadowshield benchmark
+shadowshield benchmark --adversarial
+
+# Independently authored blind semantic snapshots
+shadowshield benchmark --generalization v1
+shadowshield benchmark --generalization v2
 
 # External public dataset (needs the datasets extra)
 pip install "shadowshield[datasets]"
@@ -796,9 +833,44 @@ negatives). `balanced` mode:
 
 **This is a regression baseline and a smoke test — NOT a claim of real-world
 accuracy.** 100% on our own set just means we don't regress on the attack
-catalogue we curated. The number that matters is the external one below.
+catalogue we curated. The blind and external numbers below are the real constraint.
 
-## 2. External: `deepset/prompt-injections` (out-of-distribution — the honest number)
+## 2. Curated adversarial regression set
+
+The 36-row adversarial catalogue includes obfuscation, multilingual and indirect
+attacks, plus benign trigger-heavy counterexamples. It improved from
+15/2/16/3 to 18/0/18/0 (TP/FP/TN/FN):
+
+| recall | FPR | precision | F1 |
+|---:|---:|---:|---:|
+| 100% | 0% | 100% | 100% |
+
+This is still a curated regression set. The signatures were developed with these
+cases visible, so its perfect score is not a generalization claim.
+
+## 3. Blind semantic snapshots (the anti-gaming result)
+
+Two balanced snapshots were authored independently without detector or regex
+context, then frozen. They deliberately pair attacks with benign text containing
+similar roleplay, authority, debug, and policy vocabulary.
+
+Isolation protocol: the authoring task received only the five semantic category
+names, required row/balance counts, and a request for attack/benign contrast
+pairs. It did not receive detector source, signatures, or current predictions.
+The files were frozen before detector tuning and are integrity-pinned in tests:
+v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
+v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`.
+
+| snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
+|---|---:|---:|---:|---:|---:|
+| v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
+| v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
+
+The narrow 0.6.1 fixes intentionally leave these results unchanged. They expose
+the core deterministic tier's semantic-generalization ceiling and are development
+evidence for the next classifier/conjunction tranche, not a number to hide.
+
+## 4. External: `deepset/prompt-injections` (out-of-distribution)
 
 The field's standard public smoke set (662 rows, English + German, diverse
 phrasings). This is where in-distribution scores collapse — and ours do too.
@@ -838,7 +910,7 @@ via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`. Note: the Prompt-Gu
 models are **gated** on HuggingFace — accept the license and run `huggingface-cli
 login` (or set `HF_TOKEN`) first. The default ProtectAI model needs no token.
 
-## 3. Interpretation & roadmap
+## 5. Interpretation & roadmap
 
 - **Use the deterministic tiers** for cheap, explainable, obfuscation-aware,
   zero-false-positive catches and for everything the classifier can't do
@@ -856,7 +928,8 @@ it needs `pip install agentdojo` and an LLM API key; the adapter and a
 standalone `scan_messages_for_injection` helper are tested and ready. Publishing
 the ASR-at-fixed-utility number is the next milestone.
 
-> Numbers measured 2026-06-12 on CPU. Latency is hardware-dependent; the
+> External model numbers measured 2026-06-12; curated/blind snapshots measured
+> 2026-07-25 on CPU. Latency is hardware-dependent; the
 > classifier adds tens of ms/scan on CPU, the vector tier ~20 ms, vs. sub-ms for
 > the deterministic tiers.
 

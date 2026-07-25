@@ -17,6 +17,7 @@ Requires the ``vectors`` extra: ``pip install shadowshield[vectors]``.
 
 from __future__ import annotations
 
+import threading
 from importlib import resources
 from typing import Any
 
@@ -68,27 +69,49 @@ class VectorSimilarityDetector(Detector):
     ) -> None:
         self.model_id = model
         self.threshold = threshold
-        self._corpus: list[str] = corpus if corpus is not None else _load_corpus()
+        # Own the mutable corpus so caller-side list changes cannot invalidate the
+        # embedding row-to-corpus invariant.
+        self._corpus: list[str] = list(corpus) if corpus is not None else _load_corpus()
         self._model: Any = None
         self._corpus_emb: Any = None
+        self._index_lock = threading.Lock()
+        self._ready = threading.Event()
         if not lazy:
             self._ensure_index()
 
     def _ensure_index(self) -> Any:
-        if self._model is not None:
+        if self._ready.is_set():
             return self._model
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "VectorSimilarityDetector requires the 'vectors' extra: "
-                "pip install shadowshield[vectors]"
-            ) from exc
-        self._model = SentenceTransformer(self.model_id)
-        self._corpus_emb = self._model.encode(
-            self._corpus, normalize_embeddings=True, show_progress_bar=False
-        )
-        return self._model
+        with self._index_lock:
+            if self._ready.is_set():
+                return self._model
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:  # pragma: no cover - optional dependency
+                raise ImportError(
+                    "VectorSimilarityDetector requires the 'vectors' extra: "
+                    "pip install shadowshield[vectors]"
+                ) from exc
+
+            # Build both pieces locally and publish them only after encoding
+            # succeeds. This prevents scans from observing a half-built index and
+            # lets a later call retry cleanly after a transient load failure.
+            model = SentenceTransformer(self.model_id)
+            corpus_emb = model.encode(
+                list(self._corpus), normalize_embeddings=True, show_progress_bar=False
+            )
+            self._corpus_emb = corpus_emb
+            self._model = model
+            self._ready.set()
+            return model
+
+    def warmup(self) -> None:
+        """Load and encode the attack index explicitly for fail-fast startup."""
+        self._ensure_index()
+
+    def is_ready(self) -> bool:
+        """Report atomic index publication without loading or waiting on it."""
+        return self._ready.is_set()
 
     def add_attack(self, text: str) -> None:
         """Append a confirmed attack to the live index (self-hardening).
@@ -102,19 +125,30 @@ class VectorSimilarityDetector(Detector):
         import numpy as np
 
         emb = model.encode([text], normalize_embeddings=True, show_progress_bar=False)
-        self._corpus.append(text)
-        self._corpus_emb = np.vstack([self._corpus_emb, emb])
+        # Encoding is intentionally outside the mutation lock. Only the short
+        # read-modify-publish transaction is serialized, so concurrent hardening
+        # cannot lose rows while scans retain a stable immutable array snapshot.
+        with self._index_lock:
+            updated_corpus = [*self._corpus, text]
+            updated_emb = np.vstack([self._corpus_emb, emb])
+            self._corpus = updated_corpus
+            self._corpus_emb = updated_emb
 
     def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
         body = context.normalized.normalized or text
         if not body.strip():
             return []
-        model = self._ensure_index()
+        self._ensure_index()
         import numpy as np
 
+        # Take a consistent reference snapshot, then perform model inference and
+        # matrix work without blocking index mutation.
+        with self._index_lock:
+            model = self._model
+            corpus_emb = self._corpus_emb
         query = model.encode([body], normalize_embeddings=True, show_progress_bar=False)
         # Cosine similarity = dot product on L2-normalised vectors.
-        sims = (self._corpus_emb @ query[0]).astype(float)
+        sims = (corpus_emb @ query[0]).astype(float)
         best_idx = int(np.argmax(sims))
         best = float(sims[best_idx])
         if best < self.threshold:

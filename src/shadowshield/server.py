@@ -4,6 +4,7 @@ Exposes a :class:`~shadowshield.Shield` over HTTP so non-Python services (or a
 browser) can scan text. Endpoints:
 
 - ``GET  /health`` - liveness + version + active detectors
+- ``GET  /ready``  - readiness without loading optional model resources
 - ``POST /scan``   - full :class:`ScanResult` for a payload
 - ``POST /guard``  - safe text + block decision (fail-soft)
 - ``GET  /``       - a tiny live dashboard (textarea -> /scan)
@@ -85,6 +86,7 @@ def create_app(
     api_keys: list[str] | None = None,
     cors_origins: list[str] | None = None,
     allow_insecure_local: bool = False,
+    warmup_detectors: bool = False,
 ) -> Any:
     """Build a FastAPI app bound to ``shield`` (a balanced shield by default).
 
@@ -94,7 +96,7 @@ def create_app(
     """
     try:
         from fastapi import Depends, FastAPI, Header, HTTPException
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(
             "The server requires the 'dashboard' extra: pip install shadowshield[dashboard]"
@@ -111,6 +113,8 @@ def create_app(
     origins = resolve_cors_origins(cors_origins)
 
     guard = shield or Shield.for_mode("balanced")
+    if warmup_detectors:
+        guard.warmup()
     app = FastAPI(
         title="ShadowShield",
         version=__version__,
@@ -164,6 +168,14 @@ def create_app(
             "auth_required": bool(keys),
             "detectors": [d.name for d in guard.detectors],
         }
+
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        report = guard.readiness()
+        return JSONResponse(
+            content=report,
+            status_code=200 if report["ready"] else 503,
+        )
 
     @app.post("/scan", dependencies=guarded)
     def scan(req: ScanRequest) -> dict[str, Any]:

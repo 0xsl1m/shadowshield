@@ -38,6 +38,8 @@ import hmac
 import json
 import math
 import os
+import stat
+import tempfile
 import threading
 import time
 from collections import deque
@@ -58,7 +60,9 @@ from ._security import (
     resolve_api_keys,
     resolve_cors_origins,
     resolve_policy_key,
+    resolve_policy_state_key,
     resolve_policy_state_path,
+    secret_groups_overlap,
 )
 from .core.config import Mode, ShieldConfig
 from .core.policy import (
@@ -78,8 +82,11 @@ _STATIC = Path(__file__).parent / "static" / "dashboard.html"
 _EVENT_RING_MAX = 1000
 _MAX_POLICY_AGE_SECONDS = 86_400
 _MAX_POLICY_FUTURE_SKEW_SECONDS = 300
+_MAX_POLICY_STATE_BYTES = 262_144
+_MIN_POLICY_STATE_KEY_BYTES = 32
 _POLICY_STATE_SCHEMA_VERSION = 1
 _POLICY_STATE_MAC_DOMAIN = b"shadowshield-policy-state-v1\0"
+_LOWERCASE_HEX_DIGITS = frozenset("0123456789abcdef")
 _POLICY_STATE_PAYLOAD_KEYS = frozenset(
     {
         "highest_version",
@@ -90,6 +97,84 @@ _POLICY_STATE_PAYLOAD_KEYS = frozenset(
     }
 )
 _ACTIVE_POLICY_KEYS = frozenset({"bundle_id", "version", "issued_at", "applied_at"})
+
+
+def _policy_state_mac_for_key(payload: dict[str, Any], key: bytes) -> str:
+    signed = {
+        "schema_version": _POLICY_STATE_SCHEMA_VERSION,
+        "payload": payload,
+    }
+    canonical = json.dumps(
+        signed,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hmac.new(
+        key,
+        _POLICY_STATE_MAC_DOMAIN + canonical,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _encode_policy_state(payload: dict[str, Any], key: bytes) -> bytes:
+    envelope = {
+        "schema_version": _POLICY_STATE_SCHEMA_VERSION,
+        "payload": payload,
+        "mac": _policy_state_mac_for_key(payload, key),
+    }
+    encoded = (
+        json.dumps(
+            envelope,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+    if len(encoded) > _MAX_POLICY_STATE_BYTES:
+        raise ValueError(f"policy state exceeds {_MAX_POLICY_STATE_BYTES} byte limit")
+    return encoded
+
+
+def _read_policy_state(path: Path) -> bytes:
+    with path.open("rb") as state_file:
+        encoded = state_file.read(_MAX_POLICY_STATE_BYTES + 1)
+    if len(encoded) > _MAX_POLICY_STATE_BYTES:
+        raise ValueError(f"policy state exceeds {_MAX_POLICY_STATE_BYTES} byte limit")
+    return encoded
+
+
+def _parse_policy_state_envelope(encoded: bytes) -> tuple[Any, str]:
+    envelope = json.loads(encoded.decode("utf-8"))
+    if (
+        not isinstance(envelope, dict)
+        or set(envelope) != {"schema_version", "payload", "mac"}
+        or isinstance(envelope["schema_version"], bool)
+        or not isinstance(envelope["schema_version"], int)
+        or envelope["schema_version"] != _POLICY_STATE_SCHEMA_VERSION
+    ):
+        raise ValueError("invalid policy state envelope")
+    state_mac = envelope["mac"]
+    if (
+        not isinstance(state_mac, str)
+        or len(state_mac) != 64
+        or any(character not in _LOWERCASE_HEX_DIGITS for character in state_mac)
+    ):
+        raise ValueError("invalid policy state MAC")
+    return envelope["payload"], state_mac
+
+
+def _fsync_parent(path: Path) -> None:
+    if os.name == "nt":
+        return
+    directory_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 # --------------------------------------------------------------------------- #
@@ -198,22 +283,7 @@ class ShieldState:
         key = self._policy_state_auth_key
         if key is None:  # Constructor enforces this whenever state is configured.
             raise RuntimeError("durable policy state requires an authentication key")
-        signed = {
-            "schema_version": _POLICY_STATE_SCHEMA_VERSION,
-            "payload": payload,
-        }
-        canonical = json.dumps(
-            signed,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
-        return hmac.new(
-            key,
-            _POLICY_STATE_MAC_DOMAIN + canonical,
-            hashlib.sha256,
-        ).hexdigest()
+        return _policy_state_mac_for_key(payload, key)
 
     @staticmethod
     def _validate_policy_state_payload(raw: Any) -> dict[str, Any]:
@@ -276,19 +346,11 @@ class ShieldState:
         if path is None or not path.exists():
             return
         try:
-            envelope = json.loads(path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(envelope, dict)
-                or set(envelope) != {"schema_version", "payload", "mac"}
-                or isinstance(envelope["schema_version"], bool)
-                or not isinstance(envelope["schema_version"], int)
-                or envelope["schema_version"] != _POLICY_STATE_SCHEMA_VERSION
-                or not isinstance(envelope["mac"], str)
-            ):
-                raise ValueError("invalid policy state envelope")
-            payload = self._validate_policy_state_payload(envelope["payload"])
+            encoded_state = _read_policy_state(path)
+            raw_payload, state_mac = _parse_policy_state_envelope(encoded_state)
+            payload = self._validate_policy_state_payload(raw_payload)
             expected_mac = self._policy_state_mac(payload)
-            if not hmac.compare_digest(expected_mac, envelope["mac"]):
+            if not hmac.compare_digest(expected_mac, state_mac):
                 raise ValueError("policy state authentication failed")
 
             version = payload["highest_version"]
@@ -325,31 +387,17 @@ class ShieldState:
                 "active_policy": active_policy,
                 "updated_at": applied_at,
             }
-            envelope = {
-                "schema_version": _POLICY_STATE_SCHEMA_VERSION,
-                "payload": payload,
-                "mac": self._policy_state_mac(payload),
-            }
             try:
-                with temporary.open("w", encoding="utf-8", newline="\n") as state_file:
-                    json.dump(
-                        envelope,
-                        state_file,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                        ensure_ascii=False,
-                        allow_nan=False,
-                    )
-                    state_file.write("\n")
+                key = self._policy_state_auth_key
+                if key is None:  # Constructor enforces this whenever state is configured.
+                    raise RuntimeError("durable policy state requires an authentication key")
+                encoded_state = _encode_policy_state(payload, key)
+                with temporary.open("wb") as state_file:
+                    state_file.write(encoded_state)
                     state_file.flush()
                     os.fsync(state_file.fileno())
                 os.replace(temporary, path)
-                if os.name != "nt":
-                    directory_fd = os.open(path.parent, os.O_RDONLY)
-                    try:
-                        os.fsync(directory_fd)
-                    finally:
-                        os.close(directory_fd)
+                _fsync_parent(path)
             except Exception as exc:
                 temporary.unlink(missing_ok=True)
                 raise PolicyRejected(f"cannot persist policy replay state: {exc}") from exc
@@ -660,6 +708,102 @@ class ShieldState:
         return "\n".join(out) + "\n"
 
 
+def migrate_policy_state(
+    path: str | Path,
+    *,
+    old_key: bytes | str,
+    new_key: bytes | str,
+    backup_path: str | Path | None = None,
+) -> Path:
+    """Verify and atomically re-key a stopped 0.6.0 policy-state file.
+
+    The source must authenticate with ``old_key`` and restore as a valid policy
+    state before it is changed. The original bytes are preserved in an exclusive
+    backup, and the replacement is constrained by the same size limit as startup.
+    Run this only while every process using the state file is stopped.
+    """
+
+    state_path = Path(path)
+    backup = (
+        Path(backup_path)
+        if backup_path is not None
+        else state_path.with_name(f"{state_path.name}.pre-0.6.1.bak")
+    )
+    old_key_bytes = old_key.encode("utf-8") if isinstance(old_key, str) else old_key
+    new_key_bytes = new_key.encode("utf-8") if isinstance(new_key, str) else new_key
+    if not old_key_bytes:
+        raise ValueError("old policy-state key must not be empty")
+    if len(new_key_bytes) < _MIN_POLICY_STATE_KEY_BYTES:
+        raise ValueError(
+            f"new policy-state key must be at least {_MIN_POLICY_STATE_KEY_BYTES} bytes"
+        )
+    if hmac.compare_digest(old_key_bytes, new_key_bytes):
+        raise ValueError("new policy-state key must be independent from the old key")
+    if state_path.resolve() == backup.resolve():
+        raise ValueError("backup path must differ from the policy-state path")
+    if backup.exists():
+        raise FileExistsError(f"refusing to overwrite existing backup {backup}")
+
+    try:
+        encoded_source = _read_policy_state(state_path)
+        raw_payload, state_mac = _parse_policy_state_envelope(encoded_source)
+        payload = ShieldState._validate_policy_state_payload(raw_payload)
+        expected_mac = _policy_state_mac_for_key(payload, old_key_bytes)
+        if not hmac.compare_digest(expected_mac, state_mac):
+            raise ValueError("policy state authentication failed under the old key")
+
+        restored_mode = str(payload["effective_config"].get("mode", Mode.BALANCED.value))
+        ShieldState(
+            restored_mode,
+            policy_state_path=str(state_path),
+            policy_state_auth_key=old_key_bytes,
+        )
+        encoded_replacement = _encode_policy_state(payload, new_key_bytes)
+        source_mode = stat.S_IMODE(state_path.stat().st_mode)
+    except Exception as exc:
+        raise RuntimeError(f"cannot verify policy state {state_path}: {exc}") from exc
+
+    temporary_name: str | None = None
+    try:
+        temporary_fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{state_path.name}.migrate-",
+            dir=state_path.parent,
+        )
+        with os.fdopen(temporary_fd, "wb") as temporary_file:
+            temporary_file.write(encoded_replacement)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.chmod(temporary_name, source_mode)
+
+        # Detect an online writer or other change after verification.
+        if _read_policy_state(state_path) != encoded_source:
+            raise RuntimeError("policy state changed during migration; stop all writers and retry")
+
+        backup_fd = os.open(
+            backup,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            source_mode,
+        )
+        with os.fdopen(backup_fd, "wb") as backup_file:
+            backup_file.write(encoded_source)
+            backup_file.flush()
+            os.fsync(backup_file.fileno())
+        _fsync_parent(backup)
+
+        os.replace(temporary_name, state_path)
+        temporary_name = None
+        _fsync_parent(state_path)
+    except Exception as exc:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+        raise RuntimeError(
+            f"cannot migrate policy state {state_path}: {exc}; "
+            f"the original or backup at {backup} remains recoverable"
+        ) from exc
+
+    return backup
+
+
 # --------------------------------------------------------------------------- #
 # App factory
 # --------------------------------------------------------------------------- #
@@ -671,17 +815,25 @@ def create_control_app(
     cors_origins: list[str] | None = None,
     policy_key: bytes | str | None = None,
     policy_state_path: str | None = None,
+    policy_state_key: bytes | str | None = None,
     allow_insecure_local: bool = False,
+    warmup_detectors: bool = False,
 ) -> Any:
     """Build the FastAPI control-plane app (needs the ``dashboard`` extra).
 
     Scan and administrative credentials are separate. Direct factory mounting
     fails closed unless keys are configured; ``allow_insecure_local=True`` is an
     explicit opt-in for tests or a trusted loopback-only embedding.
+
+    Durable state uses ``policy_state_key`` independently of ``policy_key``. For
+    backward compatibility, an explicitly insecure local embedding may still
+    authenticate state with ``policy_key`` when no state key is supplied.
+    Production callers never receive that fallback, and legacy state files are
+    not silently migrated to a newly configured state key.
     """
     try:
         from fastapi import Depends, FastAPI, Header, HTTPException
-        from fastapi.responses import HTMLResponse, PlainTextResponse
+        from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(
             "The control dashboard requires the 'dashboard' extra: "
@@ -704,21 +856,38 @@ def create_control_app(
         )
     origins = resolve_cors_origins(cors_origins)
 
-    _pk = resolve_policy_key(policy_key)
-    if not allow_insecure_local:
-        overlap = set(keys) & set(admins)
-        if overlap:
-            raise RuntimeError("scan and administrator credentials must be distinct")
-        if _pk is not None and any(
-            _pk == candidate.encode("utf-8") for candidate in [*keys, *admins]
-        ):
-            raise RuntimeError("policy signing key must be distinct from API credentials")
     replay_path = resolve_policy_state_path(policy_state_path)
-    if replay_path is not None and _pk is None:
+    _pk = resolve_policy_key(policy_key)
+    state_auth_key = resolve_policy_state_key(policy_state_key)
+    legacy_local_state_key = False
+    if state_auth_key is not None and len(state_auth_key) < _MIN_POLICY_STATE_KEY_BYTES:
         raise RuntimeError(
-            "durable policy state requires policy_key/SHADOWSHIELD_POLICY_KEY "
-            "for state authentication"
+            f"policy state authentication key must be at least {_MIN_POLICY_STATE_KEY_BYTES} bytes"
         )
+    if replay_path is not None and state_auth_key is None:
+        if allow_insecure_local and _pk is not None:
+            state_auth_key = _pk
+            legacy_local_state_key = True
+        else:
+            raise RuntimeError(
+                "durable policy state authentication requires an explicit independent "
+                "policy_state_key/SHADOWSHIELD_POLICY_STATE_KEY of at least "
+                f"{_MIN_POLICY_STATE_KEY_BYTES} bytes; legacy policy-key state is "
+                "not auto-migrated in production"
+            )
+
+    credential_groups: list[tuple[str, list[bytes | str]]] = [
+        ("scan API key", list(keys)),
+        ("administrator key", list(admins)),
+        ("policy signing key", [_pk] if _pk is not None else []),
+    ]
+    if state_auth_key is not None and not legacy_local_state_key:
+        credential_groups.append(("policy state key", [state_auth_key]))
+    for index, (left_name, left_values) in enumerate(credential_groups):
+        for right_name, right_values in credential_groups[index + 1 :]:
+            if secret_groups_overlap(left_values, right_values):
+                raise RuntimeError(f"{left_name} and {right_name} credentials must be distinct")
+
     if not allow_insecure_local and _pk is not None and replay_path is None:
         raise RuntimeError(
             "signed policy updates require durable anti-replay state; configure "
@@ -727,8 +896,10 @@ def create_control_app(
     state = ShieldState(
         mode=mode,
         policy_state_path=replay_path,
-        policy_state_auth_key=_pk,
+        policy_state_auth_key=state_auth_key,
     )
+    if warmup_detectors:
+        state.shield.warmup()
     policy_verifier = make_hmac_verifier(_pk) if _pk else None
     scan_keys = list(dict.fromkeys([*keys, *admins]))
     admin_api_required = bool(keys or admins) and not allow_insecure_local
@@ -810,6 +981,14 @@ def create_control_app(
             "admin_auth_required": bool(admins),
             "detectors": [d.name for d in state.shield.detectors],
         }
+
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        report = state.shield.readiness()
+        return JSONResponse(
+            content=report,
+            status_code=200 if report["ready"] else 503,
+        )
 
     @app.post("/scan", dependencies=scan_guarded)
     def scan(req: ScanRequest) -> dict[str, Any]:
@@ -920,17 +1099,19 @@ def serve_control(
     cors_origins: list[str] | None = None,
     policy_key: str | None = None,
     policy_state_path: str | None = None,
+    policy_state_key: str | None = None,
 ) -> None:  # pragma: no cover
-    """Run the control dashboard with uvicorn."""
-    try:
-        import uvicorn
-    except ImportError as exc:
-        raise ImportError(
-            "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
-        ) from exc
+    """Run the control dashboard with uvicorn.
+
+    CLI deployments never reuse ``policy_key`` for durable-state authentication.
+    Existing state authenticated by the signing key must be deliberately
+    reinitialized or migrated before configuring an independent state key.
+    """
     keys = resolve_api_keys(api_keys)
     admins = resolve_admin_keys(admin_keys)
     loopback = is_loopback(host)
+    replay_path = resolve_policy_state_path(policy_state_path)
+    state_auth_key = resolve_policy_state_key(policy_state_key)
     if not keys and not is_loopback(host):
         raise RuntimeError(
             f"refusing to bind unauthenticated control plane to non-loopback host {host}; "
@@ -946,11 +1127,27 @@ def serve_control(
             "refusing to expose unsigned policy updates on a non-loopback host; "
             "set --policy-key or SHADOWSHIELD_POLICY_KEY"
         )
-    if resolve_policy_state_path(policy_state_path) is None and not loopback:
+    if replay_path is None and not loopback:
         raise RuntimeError(
             "refusing to expose policy updates without durable replay state; "
             "set --policy-state-path or SHADOWSHIELD_POLICY_STATE_PATH"
         )
+    if replay_path is not None and state_auth_key is None:
+        raise RuntimeError(
+            "durable policy state requires an explicit independent state key; "
+            "set --policy-state-key or SHADOWSHIELD_POLICY_STATE_KEY "
+            f"({_MIN_POLICY_STATE_KEY_BYTES}+ bytes)"
+        )
+    if state_auth_key is not None and len(state_auth_key) < _MIN_POLICY_STATE_KEY_BYTES:
+        raise RuntimeError(
+            f"policy state authentication key must be at least {_MIN_POLICY_STATE_KEY_BYTES} bytes"
+        )
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise ImportError(
+            "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
+        ) from exc
     uvicorn.run(
         create_control_app(
             mode,
@@ -959,6 +1156,7 @@ def serve_control(
             cors_origins=cors_origins,
             policy_key=policy_key,
             policy_state_path=policy_state_path,
+            policy_state_key=policy_state_key,
             allow_insecure_local=loopback,
         ),
         host=host,
@@ -991,6 +1189,15 @@ if __name__ == "__main__":
         default=None,
         help="durable anti-replay state; also SHADOWSHIELD_POLICY_STATE_PATH",
     )
+    ap.add_argument(
+        "--policy-state-key",
+        default=None,
+        help=(
+            "independent 32+ byte HMAC key for durable state; also "
+            "SHADOWSHIELD_POLICY_STATE_KEY. Legacy policy-key state is not "
+            "auto-migrated"
+        ),
+    )
     args = ap.parse_args()
     serve_control(
         args.host,
@@ -1001,4 +1208,5 @@ if __name__ == "__main__":
         cors_origins=args.cors_origin,
         policy_key=args.policy_key,
         policy_state_path=args.policy_state_path,
+        policy_state_key=args.policy_state_key,
     )
