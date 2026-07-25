@@ -56,7 +56,9 @@ shield = Shield.for_mode(
 
 A plugin that fails to import is **skipped**, not fatal — one broken third-party
 plugin can never disable the shield. A plugin detector that *raises during a scan*
-is caught by the engine's fail-safe wrapper and drops only its own contribution.
+is caught by the engine's fail-safe wrapper, reported through bounded content-free
+error metadata and metrics, and forces a block when
+`fail_closed_on_detector_error` is enabled.
 
 ## Security note
 

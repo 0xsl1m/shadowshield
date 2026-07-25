@@ -20,15 +20,16 @@ jobs:
   core:
     name: core (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (no heavy ML deps)
@@ -47,7 +48,7 @@ jobs:
         run: mypy src/shadowshield
       - name: Test
         run: pytest --cov=shadowshield --cov-report=term-missing --cov-report=xml
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: matrix.python-version == '3.14'
         with:
           name: coverage
@@ -58,12 +59,13 @@ jobs:
   ml:
     name: ml-integration
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: core
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install (with transformers + vectors)
@@ -78,29 +80,40 @@ jobs:
   build:
     name: build sdist + wheel
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: core
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Build
+        shell: bash
         run: |
-          python -m pip install --upgrade pip build
-          python -m build
+          set -euo pipefail
+          python -m pip install --only-binary=:all: \
+            --require-hashes -r requirements/build.lock
+          python -m build --no-isolation --outdir dist-a
+          python -m build --no-isolation --outdir dist-b
+          diff \
+            <(find dist-a -maxdepth 1 -type f -printf '%f\n' | sort) \
+            <(find dist-b -maxdepth 1 -type f -printf '%f\n' | sort)
+          for artifact in dist-a/*; do
+            cmp "$artifact" "dist-b/$(basename "$artifact")"
+          done
+          mv dist-a dist
+          rm -rf dist-b
       - name: Check metadata
-        run: |
-          pip install twine
-          twine check dist/*
+        run: python -m twine check dist/*
       - name: Smoke-test installed wheel
         run: |
           python -m venv /tmp/shadowshield-smoke
           /tmp/shadowshield-smoke/bin/pip install dist/*.whl
           /tmp/shadowshield-smoke/bin/shadowshield --version
           /tmp/shadowshield-smoke/bin/shadowshield scan --text "hello"
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/*
@@ -108,23 +121,29 @@ jobs:
   dependency-audit:
     name: dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - name: Audit declared dependencies
         run: |
-          python -m pip install --upgrade pip pip-audit
+          python -m pip install --upgrade "pip==26.1.2" "pip-audit==2.10.1"
           python -m pip_audit .
+          python -m pip_audit --no-deps --disable-pip \
+            -r requirements/container.lock
+          python -m pip_audit --no-deps --disable-pip \
+            -r requirements/build.lock
 
   workflow-lint:
     name: workflow lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate GitHub Actions workflows
@@ -137,9 +156,10 @@ jobs:
   container:
     name: container security smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: core
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build image
@@ -152,7 +172,7 @@ jobs:
           output: shadowshield-sbom.cdx.json
           exit-code: "0"
       - name: Upload image SBOM
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-sbom
           path: shadowshield-sbom.cdx.json

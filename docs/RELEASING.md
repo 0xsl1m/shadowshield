@@ -13,6 +13,10 @@ provenance and CycloneDX attestations through GitHub's Sigstore-backed OIDC
 service, verifies the signed provenance and an anonymous pull by digest, and
 attaches `container-digest.txt` plus the SBOM to the GitHub Release.
 
+Build tooling and the production container dependency graph are version- and
+hash-locked in `requirements/build.lock` and `requirements/container.lock`.
+Release jobs build the sdist and wheel twice and require byte-identical outputs.
+
 ## One-time setup (PyPI account owner only)
 
 This must be done in the PyPI web UI by the account that will own the project —
@@ -42,8 +46,15 @@ workflow deliberately fails its anonymous-pull gate if that happens.
 1. Let the first `Publish release container` run push the package.
 2. If the anonymous-pull step fails, open the `shadowshield` package settings
    under the `0xsl1m` account and change visibility to **Public**.
-3. Re-run the failed workflow job. Do not publish the release digest to operators
-   until the anonymous pull and evidence-attachment steps are green.
+3. Re-run the failed workflow job. It will reuse an existing image only when the
+   version and exact-commit tags resolve to the same digest and its revision and
+   version labels match the release **and** that digest already has trusted source
+   provenance from this workflow for the exact commit. It never overwrites a
+   conflicting or unattested tag. If an interruption happens after an image push
+   but before provenance is attached, delete the incomplete version/commit tags
+   from GHCR and re-run; the workflow deliberately refuses to bless them.
+   Do not publish the digest to operators until the anonymous-pull and
+   evidence-attachment steps are green.
 
 ## Cutting a release
 
@@ -59,9 +70,13 @@ gh release create vX.Y.Z --target "$merge_sha" \
 # -> PyPI publishing and exact-image scan/publish run independently
 ```
 
-Do not create the release while required checks are pending. A partial release
-is recoverable by fixing the failed workflow and re-running it, but the PyPI
-version itself cannot be replaced.
+Do not create the release while required checks are pending. Once trusted source
+provenance exists, a partial container release is recoverable by fixing the
+failed workflow and re-running it: exact matching registry content is pulled,
+rescanned, re-attested, and reused. An interruption between the first image push
+and provenance attachment intentionally needs the incomplete GHCR tags removed
+before retry. Conflicting tags and existing evidence assets are never
+overwritten. The PyPI version itself cannot be replaced.
 
 Both publication workflows independently reject non-stable tags, tag/source
 version mismatches, commits outside `main`, and commits without a successful
@@ -99,6 +114,8 @@ gh attestation verify "oci://$image" \
 
 - **Versions are immutable.** A published version can never be re-uploaded, only
   *yanked*. Always confirm `twine check` is green (CI does this) before releasing.
+- Regenerate dependency locks only in a dedicated reviewed PR, using the exact
+  commands recorded at the top of each lock file; CI audits both locked graphs.
 - Deploy the container by the exact `image@sha256` value in
   `container-digest.txt`, never by a mutable version tag or a local Compose
   rebuild. The release SBOM describes that exact pre-push-scanned image.

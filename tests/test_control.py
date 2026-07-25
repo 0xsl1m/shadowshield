@@ -9,11 +9,18 @@ from pathlib import Path
 
 import pytest
 
+import shadowshield as ss
+from shadowshield.core.config import LoggingConfig, ShieldConfig
+from shadowshield.detectors.base import Detector, ScanContext
+
 fastapi_testclient = pytest.importorskip("fastapi.testclient")
 TestClient = fastapi_testclient.TestClient
 
 from shadowshield.control import (  # noqa: E402
     _MAX_POLICY_STATE_BYTES,
+    ScanRequest,
+    ShieldState,
+    _policy_state_mac_for_key,
     create_control_app,
     migrate_policy_state,
     serve_control,
@@ -24,7 +31,12 @@ def _open_app(mode: str = "balanced", **kwargs):
     return create_control_app(mode, allow_insecure_local=True, **kwargs)
 
 
-def _persist_test_policy_state(state_path: Path, *, key: bytes = b"p" * 32) -> bytes:
+def _persist_test_policy_state(
+    state_path: Path,
+    *,
+    key: bytes = b"p" * 32,
+    mode: str = "balanced",
+) -> bytes:
     import shadowshield.core.policy as pol
 
     bundle = pol.PolicyBundle(
@@ -35,6 +47,7 @@ def _persist_test_policy_state(state_path: Path, *, key: bytes = b"p" * 32) -> b
     )
     client = TestClient(
         _open_app(
+            mode,
             policy_key=key,
             policy_state_path=str(state_path),
         )
@@ -273,6 +286,27 @@ def test_prometheus_metrics_endpoint() -> None:
     assert "shadowshield_build_info{version=" in body
 
 
+def test_detector_errors_are_exposed_in_control_metrics() -> None:
+    class BrokenDetector(Detector):
+        name = 'broken"metric'
+
+        def scan(self, text: str, *, context: ScanContext) -> list[ss.Threat]:
+            raise RuntimeError("private failure detail")
+
+    state = ShieldState()
+    config = ShieldConfig.for_mode("balanced", logging=LoggingConfig(enabled=False))
+    state.shield = ss.Shield(config, extra_detectors=[BrokenDetector()])
+    result = state.scan_and_record(ScanRequest(text="hello"))
+
+    assert result["metadata"]["detector_errors"] == {'broken"metric': 1}
+    metrics = state.metrics_view()
+    assert metrics["detector_errors"] == 1
+    assert metrics["by_detector_error"] == {'broken"metric': 1}
+    prometheus = state.metrics_prometheus("test")
+    assert 'shadowshield_detector_errors_total{detector="broken\\"metric"} 1' in prometheus
+    assert "private failure detail" not in prometheus
+
+
 def test_prometheus_metrics_requires_auth() -> None:
     c = TestClient(
         create_control_app(
@@ -458,6 +492,60 @@ def test_policy_replay_state_survives_restart(tmp_path: Path) -> None:
     assert restored_policy["highest_accepted_version"] == 1
     assert restored_policy["active"]["bundle_id"] == "durable-v1"
     assert restarted.get("/api/config").json()["block_threshold"] == 0.5
+
+
+def test_policy_state_from_0_6_2_restores_with_additive_config_defaults(
+    tmp_path: Path,
+) -> None:
+    key = b"p" * 32
+    state_path = tmp_path / "policy-state.json"
+    _persist_test_policy_state(state_path, key=key)
+
+    envelope = json.loads(state_path.read_text(encoding="utf-8"))
+    effective = envelope["payload"]["effective_config"]
+    assert effective.pop("fail_closed_on_detector_error") is False
+    envelope["mac"] = _policy_state_mac_for_key(envelope["payload"], key)
+    state_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    restarted = TestClient(
+        _open_app(
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    assert restarted.get("/health").status_code == 200
+    assert restarted.post("/scan", json={"text": "hello"}).status_code == 200
+
+
+def test_policy_state_from_0_6_2_preserves_strict_detector_failure_policy(
+    tmp_path: Path,
+) -> None:
+    key = b"p" * 32
+    state_path = tmp_path / "strict-policy-state.json"
+    _persist_test_policy_state(state_path, key=key, mode="strict")
+
+    envelope = json.loads(state_path.read_text(encoding="utf-8"))
+    effective = envelope["payload"]["effective_config"]
+    assert effective.pop("fail_closed_on_detector_error") is True
+    envelope["mac"] = _policy_state_mac_for_key(envelope["payload"], key)
+    state_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    restarted = TestClient(
+        _open_app(
+            "strict",
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    restored = restarted.get("/api/config").json()
+    assert restored["mode"] == "strict"
+    assert restored["fail_closed_on_detector_error"] is True
 
 
 def test_policy_replay_state_rejects_tampering(tmp_path: Path) -> None:

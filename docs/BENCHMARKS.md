@@ -26,14 +26,40 @@ pip install "shadowshield[transformers]"
 shadowshield benchmark --hf deepset/prompt-injections --split test --transformer
 ```
 
+The CLI warms every configured detector before starting the latency clock. Its
+JSON and text reports include a runtime-integrity section covering warmup,
+readiness, and bounded per-detector failure counts. A benchmark with a warmup
+failure, a detector that remains unready, or any detector error exits non-zero
+and is marked **unreliable**; its confusion counts remain available for
+diagnosis but must not be published as quality evidence. CLI benchmark shields
+disable normal audit emission so logging I/O does not distort latency or corrupt
+the command's machine-readable JSON stdout.
+
+Programmatic callers can request the same behavior with
+`evaluate_shield(shield, examples, warmup=True)`. The default remains
+`warmup=False` for API compatibility. In both modes, readiness is checked after
+the scans and per-scan detector error counters are aggregated.
+
+Per-category output retains the original `total`, `flagged`, and flag-rate
+fields, and additionally reports class-conditional TP/FP/TN/FN, recall, FPR,
+and balanced accuracy. Recall is `null`/`n/a` for categories with no attack
+rows; FPR is `null`/`n/a` for categories with no benign rows; balanced accuracy
+is defined only when both classes are present.
+
+Aggregate and per-category recall/FPR also include two-sided 95% Wilson score
+intervals. Wilson intervals remain informative at small sample sizes and at
+observed rates of 0% or 100%; an interval is `null`/`n/a` when that category has
+no rows for the corresponding class. Existing scalar metric fields are
+unchanged, and the interval fields are additive.
+
 ## 1. Bundled benchmark (in-distribution — a regression baseline)
 
 75 curated examples (40 attack / 35 benign, incl. 16 NotInject-style hard
 negatives). `balanced` mode:
 
-| recall | FPR | precision | F1 | p50 |
+| recall (95% CI) | FPR (95% CI) | precision | F1 | p50 |
 |---:|---:|---:|---:|---:|
-| 100% | 0% | 100% | 100% | 0.16 ms |
+| 100% [91.2%, 100%] | 0% [0%, 9.9%] | 100% | 100% | 0.16 ms |
 
 **This is a regression baseline and a smoke test — NOT a claim of real-world
 accuracy.** 100% on our own set just means we don't regress on the attack
@@ -45,9 +71,9 @@ The 36-row adversarial catalogue includes obfuscation, multilingual and indirect
 attacks, plus benign trigger-heavy counterexamples. It improved from
 15/2/16/3 to 18/0/18/0 (TP/FP/TN/FN):
 
-| recall | FPR | precision | F1 |
+| recall (95% CI) | FPR (95% CI) | precision | F1 |
 |---:|---:|---:|---:|
-| 100% | 0% | 100% | 100% |
+| 100% [82.4%, 100%] | 0% [0%, 17.6%] | 100% | 100% |
 
 This is still a curated regression set. The signatures were developed with these
 cases visible, so its perfect score is not a generalization claim.
@@ -67,12 +93,12 @@ v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
 v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`;
 v3 SHA-256 `2285031e8143572311a522a4b6ec1a39c96a34ac2b42785f17818e8a145342bf`.
 
-| snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
+| snapshot | rows | TP/FP/TN/FN | recall (95% CI) | FPR (95% CI) | balanced accuracy |
 |---|---:|---:|---:|---:|---:|
-| v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
-| v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
-| v3 | 40 | 6/6/14/14 | 30% | 30% | 50% |
-| **aggregate** | **90** | **10/9/36/35** | **22.2%** | **20%** | **51.1%** |
+| v1 | 30 | 4/2/13/11 | 26.7% [10.9%, 52.0%] | 13.3% [3.7%, 37.9%] | 56.7% |
+| v2 | 20 | 0/1/9/10 | 0% [0%, 27.8%] | 10% [1.8%, 40.4%] | 45% |
+| v3 | 40 | 6/6/14/14 | 30% [14.5%, 51.9%] | 30% [14.5%, 51.9%] | 50% |
+| **aggregate** | **90** | **10/9/36/35** | **22.2% [12.5%, 36.3%]** | **20% [10.9%, 33.8%]** | **51.1%** |
 
 The v3 snapshot was opened only after a detector candidate and acceptance bar
 were frozen. That candidate raised aggregate recall to 55.6% but failed the

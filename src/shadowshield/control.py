@@ -43,6 +43,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,12 @@ _POLICY_STATE_PAYLOAD_KEYS = frozenset(
 )
 _ACTIVE_POLICY_KEYS = frozenset({"bundle_id", "version", "issued_at", "applied_at"})
 _FileRevision = tuple[int, int, int, int, int, int, int]
+
+
+def _prometheus_label(value: str) -> str:
+    """Escape a dynamic Prometheus label value."""
+
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
 def _policy_state_mac_for_key(payload: dict[str, Any], key: bytes) -> str:
@@ -391,6 +398,7 @@ class ShieldState:
         self._dec_total: dict[str, int] = {}
         self._sev_total: dict[str, int] = {}
         self._det_total: dict[str, int] = {}
+        self._det_error_total: dict[str, int] = {}
         self._lat_sum_ms = 0.0
         self.floor = ProtectionFloor()
         self.active_policy: dict[str, Any] | None = None
@@ -409,13 +417,26 @@ class ShieldState:
         self._baseline_config = self.shield.config.model_copy(deep=True)
         if self._restored_policy_config is not None:
             try:
-                restored = ShieldConfig.model_validate(self._restored_policy_config)
+                restored_data = dict(self._restored_policy_config)
+                if "fail_closed_on_detector_error" not in restored_data:
+                    # 0.6.2 durable state predates this field. Preserve the
+                    # current mode preset's security posture instead of using
+                    # the model-wide balanced default, which would silently
+                    # make a restored strict deployment fail open.
+                    restored_mode = Mode(restored_data.get("mode", self.mode))
+                    restored_data["fail_closed_on_detector_error"] = restored_mode is Mode.STRICT
+                restored = ShieldConfig.model_validate(restored_data)
+                # Canonicalize through the current schema before checking the
+                # protection floor. This permits additive fields with safe
+                # defaults to restore older authenticated state while still
+                # detecting any clamp that would change its effective policy.
+                canonical_restored = restored.model_dump(mode="json")
                 restored = clamp_to_floor(
                     restored,
                     self.floor,
                     baseline=self._baseline_config,
                 )
-                if restored.model_dump(mode="json") != self._restored_policy_config:
+                if restored.model_dump(mode="json") != canonical_restored:
                     raise ValueError("persisted policy config breaches the local protection floor")
                 degradation = protection_level(self._baseline_config) - protection_level(restored)
                 if degradation > self.floor.max_degradation_delta + 1e-9:
@@ -703,6 +724,9 @@ class ShieldState:
         start = time.perf_counter()
         result = shield.scan(req.text, direction=req.direction, identity=req.identity)
         latency_ms = (time.perf_counter() - start) * 1000.0
+        detector_errors = result.metadata.get("detector_errors", {})
+        if not isinstance(detector_errors, dict):
+            detector_errors = {}
 
         threats = [
             {
@@ -736,6 +760,7 @@ class ShieldState:
                 "findings_total": result.metadata.get("findings_total", len(result.threats)),
                 "findings_retained": len(result.threats),
                 "findings_truncated": result.metadata.get("findings_truncated", 0),
+                "detector_errors": dict(detector_errors),
             }
             self.events.appendleft(event)
             self._scans_total += 1
@@ -748,6 +773,10 @@ class ShieldState:
             self._lat_sum_ms += latency_ms
             for t in result.threats:
                 self._det_total[t.detector] = self._det_total.get(t.detector, 0) + 1
+            for detector, count in detector_errors.items():
+                self._det_error_total[detector] = self._det_error_total.get(detector, 0) + int(
+                    count
+                )
 
         out = result.to_dict()
         out["latency_ms"] = round(latency_ms, 3)
@@ -775,6 +804,7 @@ class ShieldState:
         return {
             "mode": cfg.mode.value if hasattr(cfg.mode, "value") else str(cfg.mode),
             "block_threshold": round(float(cfg.block_threshold), 4),
+            "fail_closed_on_detector_error": bool(cfg.fail_closed_on_detector_error),
             "llm_check_enabled": bool(cfg.llm_check.enabled),
             "rate_limit_enabled": bool(cfg.rate_limit.enabled),
             "detectors": detectors,
@@ -783,7 +813,7 @@ class ShieldState:
     def events_view(self, limit: int) -> dict[str, Any]:
         with self._lock:
             return {
-                "events": list(self.events)[:limit],
+                "events": list(islice(self.events, limit)),
                 "total": len(self.events),
             }
 
@@ -794,6 +824,7 @@ class ShieldState:
         by_decision: dict[str, int] = {}
         by_severity: dict[str, int] = {}
         by_detector: dict[str, int] = {}
+        by_detector_error: dict[str, int] = {}
         by_direction: dict[str, int] = {"input": 0, "output": 0}
         latencies: list[float] = []
         for e in events:
@@ -803,13 +834,22 @@ class ShieldState:
             latencies.append(e["latency_ms"])
             for t in e["threats"]:
                 by_detector[t["detector"]] = by_detector.get(t["detector"], 0) + 1
+            for detector, count in e.get("detector_errors", {}).items():
+                by_detector_error[detector] = by_detector_error.get(detector, 0) + int(count)
+
+        sorted_latencies = sorted(latencies)
 
         def pct(p: float) -> float:
-            if not latencies:
+            if not sorted_latencies:
                 return 0.0
-            s = sorted(latencies)
-            k = max(0, min(len(s) - 1, round(p / 100 * (len(s) - 1))))
-            return round(s[k], 3)
+            k = max(
+                0,
+                min(
+                    len(sorted_latencies) - 1,
+                    round(p / 100 * (len(sorted_latencies) - 1)),
+                ),
+            )
+            return round(sorted_latencies[k], 3)
 
         blocked = by_decision.get("block", 0)
         # Volume sparkline: scans per second over the last 60s window.
@@ -827,6 +867,8 @@ class ShieldState:
             "by_decision": by_decision,
             "by_severity": by_severity,
             "by_detector": by_detector,
+            "detector_errors": sum(by_detector_error.values()),
+            "by_detector_error": by_detector_error,
             "by_direction": by_direction,
             "latency_p50_ms": pct(50),
             "latency_p95_ms": pct(95),
@@ -846,6 +888,7 @@ class ShieldState:
             decision_totals = dict(self._dec_total)
             severity_totals = dict(self._sev_total)
             detector_totals = dict(self._det_total)
+            detector_error_totals = dict(self._det_error_total)
             latency_sum_ms = self._lat_sum_ms
         out: list[str] = []
         out.append("# HELP shadowshield_scans_total Total scans processed since start.")
@@ -862,7 +905,13 @@ class ShieldState:
         out.append("# HELP shadowshield_detector_hits_total Threats raised, by detector.")
         out.append("# TYPE shadowshield_detector_hits_total counter")
         for k, v in sorted(detector_totals.items()):
-            out.append(f'shadowshield_detector_hits_total{{detector="{k}"}} {v}')
+            out.append(f'shadowshield_detector_hits_total{{detector="{_prometheus_label(k)}"}} {v}')
+        out.append("# HELP shadowshield_detector_errors_total Detector execution failures.")
+        out.append("# TYPE shadowshield_detector_errors_total counter")
+        for k, v in sorted(detector_error_totals.items()):
+            out.append(
+                f'shadowshield_detector_errors_total{{detector="{_prometheus_label(k)}"}} {v}'
+            )
         out.append("# HELP shadowshield_scan_latency_seconds_sum Cumulative scan latency.")
         out.append("# TYPE shadowshield_scan_latency_seconds_sum counter")
         out.append(f"shadowshield_scan_latency_seconds_sum {latency_sum_ms / 1000.0:.6f}")

@@ -14,6 +14,10 @@ mode: balanced
 # is non-throwing; use Shield.guard() for fail-closed ergonomics instead).
 raise_on_block: false
 
+# Surface detector failures as content-free result metadata. Set true to force
+# BLOCK after the other independent detectors finish (the strict preset does).
+fail_closed_on_detector_error: false
+
 # Aggregate score (0..1) at/above which a payload is forced to BLOCK regardless
 # of the per-severity policy below. Lower = more cautious.
 block_threshold: 0.65

@@ -122,6 +122,11 @@ class ShieldConfig(BaseModel):
     # default so the library is non-throwing unless you opt in.
     raise_on_block: bool = False
 
+    # When True, a detector that raises forces the scan to BLOCK after the
+    # remaining independent detectors finish. Failures are always surfaced as
+    # bounded, content-free result metadata even when this policy is disabled.
+    fail_closed_on_detector_error: bool = False
+
     # Aggregate score at/above which the payload is considered "not safe" even
     # if no single detector hit CRITICAL. Lower = more cautious.
     block_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
@@ -191,6 +196,7 @@ def _strict() -> ShieldConfig:
     return ShieldConfig(
         mode=Mode.STRICT,
         raise_on_block=False,
+        fail_closed_on_detector_error=True,
         block_threshold=0.45,
         policy=PolicyConfig(
             none=Decision.ALLOW,

@@ -4,6 +4,50 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] — 2026-07-25
+
+Post-launch reliability, request-intake, observability, performance, and
+reproducible-release hardening. Detection signatures, thresholds, and frozen
+benchmark behavior remain unchanged.
+
+### Security and stability
+- Fixed the documented session guard path so clean and blocked input/output turns
+  are recorded exactly once before return or re-raise, restoring multi-turn and
+  alignment-trace protection.
+- Coalesced request-body frames into one bounded buffer, capped fragmentation,
+  and added a total 15-second read deadline so authenticated slow/chunked bodies
+  cannot hold every scan-admission slot indefinitely; protected non-preflight
+  `OPTIONS` requests now authenticate before body or admission work.
+- Made detector failures visible through bounded, content-free result metadata,
+  audit/control events, benchmark integrity, and Prometheus counters. Strict mode
+  now blocks on a detector error; other modes can opt into the same behavior.
+- Kept authenticated 0.6.2 durable policy state restorable after the additive
+  detector-error policy field, and made copied example environments fail before
+  starting with known placeholder credentials.
+
+### Performance and evaluation
+- Cached immutable effective detector configuration in each engine, fast-rejected
+  markdown-beacon parsing when no image opener exists, removed a million-call
+  inner-loop `max()` hotspot, and avoided duplicate control-metric sorting.
+  Audit prototypes measured roughly 5–12% faster short/ordinary scans and an
+  additional ~8.6% improvement on 1 KiB anomaly-heavy paths, with generated and
+  corpus-wide decision equivalence.
+- Benchmark runs now warm detectors outside the latency clock, surface readiness
+  and runtime failures, exit nonzero when evidence is unreliable, and report
+  class-conditional per-category confusion metrics with 95% Wilson intervals.
+  Public/frozen rows remain regression-only and were not used for tuning.
+
+### Supply chain and CI
+- Hash-locked the release build and production-container dependency graphs,
+  pinned the Dockerfile frontend, removed the unused mandatory `tiktoken`
+  dependency, audited both locks, and require byte-identical double builds.
+- Upgraded maintained GitHub Actions to their SHA-pinned Node 24 generations and
+  bounded every workflow job with an enforced timeout; strict project typing is
+  isolated from incompatible syntax in optional third-party stubs.
+- Container publication now refuses conflicting version/commit tags and existing
+  release assets, while safely resuming only from an exact matching digest with
+  verified revision/version labels and trusted exact-source provenance.
+
 ## [0.6.2] — 2026-07-25
 
 Production hardening for failure recovery, durable state, release provenance,
@@ -298,6 +342,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.6.3]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.3
 [0.6.2]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.2
 [0.6.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.1
 [0.6.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.0

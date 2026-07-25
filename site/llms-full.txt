@@ -4,7 +4,7 @@
 > multi-agent AI systems, with a strong emphasis on prompt-injection defense
 > (OWASP LLM01). MIT licensed. `pip install shadowshield`.
 > Site: https://shadowshield.xyz/ · Repo: https://github.com/0xsl1m/shadowshield
-> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.2
+> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.3
 
 This file is a flattened synthesis of the project's primary documentation,
 provided for LLM ingestion. Content below is derived from and includes excerpts from the
@@ -152,8 +152,8 @@ pip install "shadowshield[dashboard]"      # + FastAPI HTTP server & dashboard
 pip install "shadowshield[all]"            # everything
 ```
 
-Core deps are intentionally small: `pydantic`, `structlog`, `pyyaml`, `httpx`,
-`tiktoken`. The ML classifier, Presidio PII, dataset loaders, and dashboard live
+Core deps are intentionally small: `pydantic`, `structlog`, `pyyaml`, and
+`httpx`. The ML classifier, Presidio PII, dataset loaders, and dashboard live
 behind extras — the default install pulls **no** heavy ML stack.
 
 ---
@@ -275,7 +275,7 @@ stopped:
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 docker compose stop shadowshield
@@ -630,8 +630,10 @@ identity to block on its own.
 
 ## Fail-safe defaults
 
-- **Detector errors fail safe.** A detector that raises drops only its own
-  contribution; the scan continues with the other layers.
+- **Detector errors are visible.** The other independent layers continue, while
+  bounded content-free metadata and metrics identify the failed detector. Strict
+  mode forces a block; balanced/permissive report the failure unless configured
+  to fail closed.
 - **`guard()` fails closed** (raises), **`filter()` fails soft** (returns the safe
   fallback). You choose per call site.
 - **Secrets are never echoed.** Secret matches are redacted from `Threat` records
@@ -753,11 +755,11 @@ Generate an annotated starter file with `shadowshield init > shield.yaml`.
 
 ## Modes
 
-| Mode | block_threshold | medium→ | LLM check | rate limit |
-|---|---|---|---|---|
-| `strict` | 0.45 | block | on | on (30/60s) |
-| `balanced` | 0.65 | sanitize | off | off |
-| `permissive` | 0.85 | flag | off | off |
+| Mode | block_threshold | medium→ | detector failure | LLM check | rate limit |
+|---|---|---|---|---|---|
+| `strict` | 0.45 | block | block | on | on (30/60s) |
+| `balanced` | 0.65 | sanitize | report | off | off |
+| `permissive` | 0.85 | flag | report | off | off |
 
 A mode seeds every default; any field you set in YAML or `for_mode(..., **kw)`
 layers on top.
@@ -768,6 +770,7 @@ layers on top.
 |---|---|
 | `mode` | preset posture (strict/balanced/permissive) |
 | `raise_on_block` | make `Shield.scan()` raise on a block (default false) |
+| `fail_closed_on_detector_error` | block if any detector raises; failures are always reported as content-free metadata (strict defaults true) |
 | `block_threshold` | aggregate score that forces a block regardless of policy |
 | `policy.{none..critical}` | severity → decision mapping |
 | `detectors.<name>.enabled` | per-detector toggle |
@@ -825,14 +828,26 @@ pip install "shadowshield[transformers]"
 shadowshield benchmark --hf deepset/prompt-injections --split test --transformer
 ```
 
+The CLI warms every configured detector before starting the latency clock. Its
+JSON and text reports include a runtime-integrity section covering warmup,
+readiness, and bounded per-detector failure counts. A benchmark with a warmup
+failure, a detector that remains unready, or any detector error exits non-zero
+and is marked **unreliable**; its confusion counts remain available for
+diagnosis but must not be published as quality evidence.
+
+Per-category output reports class-conditional TP/FP/TN/FN, recall, FPR, and
+balanced accuracy in addition to the compatible flag-rate fields. Aggregate
+and per-category recall/FPR include two-sided 95% Wilson score intervals; an
+interval is `null`/`n/a` when its class denominator is empty.
+
 ## 1. Bundled benchmark (in-distribution — a regression baseline)
 
 75 curated examples (40 attack / 35 benign, incl. 16 NotInject-style hard
 negatives). `balanced` mode:
 
-| recall | FPR | precision | F1 | p50 |
+| recall (95% CI) | FPR (95% CI) | precision | F1 | p50 |
 |---:|---:|---:|---:|---:|
-| 100% | 0% | 100% | 100% | 0.16 ms |
+| 100% [91.2%, 100%] | 0% [0%, 9.9%] | 100% | 100% | 0.16 ms |
 
 **This is a regression baseline and a smoke test — NOT a claim of real-world
 accuracy.** 100% on our own set just means we don't regress on the attack
@@ -844,9 +859,9 @@ The 36-row adversarial catalogue includes obfuscation, multilingual and indirect
 attacks, plus benign trigger-heavy counterexamples. It improved from
 15/2/16/3 to 18/0/18/0 (TP/FP/TN/FN):
 
-| recall | FPR | precision | F1 |
+| recall (95% CI) | FPR (95% CI) | precision | F1 |
 |---:|---:|---:|---:|
-| 100% | 0% | 100% | 100% |
+| 100% [82.4%, 100%] | 0% [0%, 17.6%] | 100% | 100% |
 
 This is still a curated regression set. The signatures were developed with these
 cases visible, so its perfect score is not a generalization claim.
@@ -865,12 +880,12 @@ v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
 v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`;
 v3 SHA-256 `2285031e8143572311a522a4b6ec1a39c96a34ac2b42785f17818e8a145342bf`.
 
-| snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
+| snapshot | rows | TP/FP/TN/FN | recall (95% CI) | FPR (95% CI) | balanced accuracy |
 |---|---:|---:|---:|---:|---:|
-| v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
-| v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
-| v3 | 40 | 6/6/14/14 | 30% | 30% | 50% |
-| **aggregate** | **90** | **10/9/36/35** | **22.2%** | **20%** | **51.1%** |
+| v1 | 30 | 4/2/13/11 | 26.7% [10.9%, 52.0%] | 13.3% [3.7%, 37.9%] | 56.7% |
+| v2 | 20 | 0/1/9/10 | 0% [0%, 27.8%] | 10% [1.8%, 40.4%] | 45% |
+| v3 | 40 | 6/6/14/14 | 30% [14.5%, 51.9%] | 30% [14.5%, 51.9%] | 50% |
+| **aggregate** | **90** | **10/9/36/35** | **22.2% [12.5%, 36.3%]** | **20% [10.9%, 33.8%]** | **51.1%** |
 
 V3 was opened only after a candidate and acceptance bar were frozen. The
 candidate improved recall but missed the false-positive and accuracy gates, so
@@ -1164,7 +1179,9 @@ shield = Shield.for_mode(
 
 A plugin that fails to import is **skipped**, not fatal — one broken third-party
 plugin can never disable the shield. A plugin detector that *raises during a scan*
-is caught by the engine's fail-safe wrapper and drops only its own contribution.
+is caught by the engine's fail-safe wrapper, reported through bounded content-free
+error metadata and metrics, and forces a block when
+`fail_closed_on_detector_error` is enabled.
 
 ## Security note
 
