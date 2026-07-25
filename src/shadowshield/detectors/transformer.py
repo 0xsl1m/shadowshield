@@ -19,6 +19,7 @@ model, or your own fine-tune without touching code.
 
 from __future__ import annotations
 
+import copy
 import threading
 from typing import Any
 
@@ -31,6 +32,41 @@ DEFAULT_MODEL = "protectai/deberta-v3-base-prompt-injection-v2"
 
 # Label strings different models use for the "this is an attack" class.
 _ATTACK_LABELS = {"INJECTION", "JAILBREAK", "LABEL_1", "1", "UNSAFE", "MALICIOUS"}
+
+
+def _fresh_exception(error: BaseException) -> BaseException:
+    """Clone a failure without sharing its mutable traceback between callers."""
+    fresh: BaseException | None = None
+    try:
+        fresh = copy.copy(error)
+    except BaseException:
+        try:
+            fresh = type(error)(*error.args)
+        except BaseException:
+            try:
+                fresh = RuntimeError(f"{type(error).__name__}: {error}")
+            except BaseException:
+                fresh = RuntimeError("model load failed")
+    if fresh is error or not isinstance(fresh, BaseException):
+        try:
+            fresh = RuntimeError(f"{type(error).__name__}: {error}")
+        except BaseException:
+            fresh = RuntimeError("model load failed")
+    try:
+        return fresh.with_traceback(None)
+    except BaseException:
+        return RuntimeError("model load failed")
+
+
+class _LoadAttempt:
+    """One model-load generation shared by every caller that encounters it."""
+
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+        self.done = threading.Event()
+        self.result: Any | None = None
+        self.error: BaseException | None = None
+        self.waiters = 0
 
 
 class TransformerDetector(Detector):
@@ -65,18 +101,43 @@ class TransformerDetector(Detector):
         self.device = device
         self._pipeline: Any | None = None
         self._load_lock = threading.Lock()
+        self._load_condition = threading.Condition(self._load_lock)
+        self._load_generation = 0
+        self._load_attempt: _LoadAttempt | None = None
         if not lazy:
             self._ensure_pipeline()
 
     def _ensure_pipeline(self) -> Any:
-        if self._pipeline is not None:
-            return self._pipeline
-        with self._load_lock:
-            # Loading a model is expensive and may allocate scarce GPU memory.
-            # Re-check after taking the lock so concurrent first scans share one
-            # initialized pipeline.
-            if self._pipeline is not None:
-                return self._pipeline
+        loaded_pipeline = self._pipeline
+        if loaded_pipeline is not None:
+            return loaded_pipeline
+
+        with self._load_condition:
+            loaded_pipeline = self._pipeline
+            if loaded_pipeline is not None:
+                return loaded_pipeline
+
+            attempt = self._load_attempt
+            if attempt is None:
+                self._load_generation += 1
+                attempt = _LoadAttempt(self._load_generation)
+                self._load_attempt = attempt
+                is_loader = True
+            else:
+                attempt.waiters += 1
+                self._load_condition.notify_all()
+                is_loader = False
+
+        if not is_loader:
+            attempt.done.wait()
+            if attempt.error is not None:
+                raise _fresh_exception(attempt.error)
+            return attempt.result
+
+        # Loading a model is expensive and may allocate scarce GPU memory.
+        # Construct outside the coordination lock so concurrent callers can join
+        # this exact attempt rather than queueing independent loads.
+        try:
             try:
                 from transformers import pipeline
             except ImportError as exc:  # pragma: no cover - optional dependency
@@ -93,9 +154,33 @@ class TransformerDetector(Detector):
             if self.device is not None:
                 kwargs["device"] = self.device
             loaded = pipeline(**kwargs)
-            # Publish only after construction succeeds. A failed load leaves the
-            # detector uninitialized so a later scan can retry.
+        except BaseException as exc:
+            prototype: BaseException = RuntimeError("model load failed")
+            try:
+                # Keep a traceback-free prototype. The loader re-raises ``exc``;
+                # each waiter clones the prototype so exception tracebacks cannot
+                # race or grow as the same object is raised across threads.
+                prototype = _fresh_exception(exc)
+            except BaseException:
+                # Exception subclasses can make copying, construction, or even
+                # stringification fail. They must never strand this generation.
+                pass
+            finally:
+                with self._load_condition:
+                    attempt.error = prototype
+                    self._load_attempt = None
+                    attempt.done.set()
+                    self._load_condition.notify_all()
+            raise
+
+        with self._load_condition:
+            # Publish only after construction succeeds. All callers that joined
+            # this generation observe the same fully initialized pipeline.
             self._pipeline = loaded
+            attempt.result = loaded
+            self._load_attempt = None
+            attempt.done.set()
+            self._load_condition.notify_all()
             return loaded
 
     def warmup(self) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -21,6 +22,35 @@ from shadowshield.control import (  # noqa: E402
 
 def _open_app(mode: str = "balanced", **kwargs):
     return create_control_app(mode, allow_insecure_local=True, **kwargs)
+
+
+def _persist_test_policy_state(state_path: Path, *, key: bytes = b"p" * 32) -> bytes:
+    import shadowshield.core.policy as pol
+
+    bundle = pol.PolicyBundle(
+        config={"block_threshold": 0.5},
+        bundle_id="test-durable-v1",
+        version=1,
+        issued_at=time.time(),
+    )
+    client = TestClient(
+        _open_app(
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    response = client.post(
+        "/api/policy",
+        json={
+            "config": bundle.config,
+            "bundle_id": bundle.bundle_id,
+            "version": bundle.version,
+            "issued_at": bundle.issued_at,
+            "signature": pol.sign_bundle(bundle, key),
+        },
+    )
+    assert response.status_code == 200
+    return state_path.read_bytes()
 
 
 # --------------------------------------------------------------------------- #
@@ -526,6 +556,47 @@ def test_policy_replay_state_is_bounded_before_json_parsing(tmp_path: Path) -> N
         _open_app(policy_key="sk", policy_state_path=str(state_path))
 
 
+def test_policy_replay_state_rejects_final_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    state_path = tmp_path / "policy-state.json"
+    try:
+        state_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        _open_app(policy_key="sk", policy_state_path=str(state_path))
+
+
+def test_policy_replay_state_rejects_non_regular_file(tmp_path: Path) -> None:
+    state_path = tmp_path / "policy-state"
+    state_path.mkdir()
+
+    with pytest.raises(RuntimeError, match="must be a regular file"):
+        _open_app(policy_key="sk", policy_state_path=str(state_path))
+
+
+def test_policy_state_persistence_does_not_reuse_predictable_temporary(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "policy-state.json"
+    victim = tmp_path / "unrelated"
+    victim.write_bytes(b"must not be overwritten")
+    predictable_temporary = state_path.with_name(f".{state_path.name}.tmp")
+    try:
+        os.link(victim, predictable_temporary)
+    except OSError as exc:
+        pytest.skip(f"hard links are unavailable: {exc}")
+
+    _persist_test_policy_state(state_path)
+
+    assert victim.read_bytes() == b"must not be overwritten"
+    assert predictable_temporary.read_bytes() == b"must not be overwritten"
+    assert state_path.is_file()
+    assert not list(tmp_path.glob(f".{state_path.name}.tmp-*"))
+
+
 def test_policy_rejects_state_too_large_to_restart_without_mutation(tmp_path: Path) -> None:
     import shadowshield.core.policy as pol
 
@@ -676,13 +747,17 @@ def test_offline_policy_state_migration_preserves_and_rekeys_state(tmp_path: Pat
     )
     assert response.status_code == 200
     legacy_bytes = state_path.read_bytes()
+    backup_path = tmp_path / "operator-selected-backups" / "legacy-state.json"
+    backup_path.parent.mkdir()
 
     backup = migrate_policy_state(
         state_path,
         old_key=old_key,
         new_key=new_key,
+        backup_path=backup_path,
     )
 
+    assert backup == backup_path
     assert backup.read_bytes() == legacy_bytes
     assert state_path.read_bytes() != legacy_bytes
     restarted = create_control_app(
@@ -737,6 +812,47 @@ def test_policy_state_migration_failure_keeps_source_unchanged(tmp_path: Path) -
 
     assert state_path.read_bytes() == original
     assert not state_path.with_name(f"{state_path.name}.pre-0.6.1.bak").exists()
+
+
+def test_policy_state_migration_rejects_source_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "target-state.json"
+    original = _persist_test_policy_state(target)
+    state_path = tmp_path / "policy-state.json"
+    try:
+        state_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        migrate_policy_state(
+            state_path,
+            old_key=b"p" * 32,
+            new_key=b"s" * 32,
+        )
+
+    assert target.read_bytes() == original
+    assert state_path.is_symlink()
+
+
+def test_policy_state_migration_refuses_broken_symlink_backup(tmp_path: Path) -> None:
+    state_path = tmp_path / "policy-state.json"
+    original = _persist_test_policy_state(state_path)
+    backup = tmp_path / "operator-selected-backup"
+    try:
+        backup.symlink_to(tmp_path / "missing-target")
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        migrate_policy_state(
+            state_path,
+            old_key=b"p" * 32,
+            new_key=b"s" * 32,
+            backup_path=backup,
+        )
+
+    assert state_path.read_bytes() == original
+    assert backup.is_symlink()
 
 
 def test_control_factory_fails_closed_without_credentials() -> None:

@@ -4,7 +4,7 @@
 > multi-agent AI systems, with a strong emphasis on prompt-injection defense
 > (OWASP LLM01). MIT licensed. `pip install shadowshield`.
 > Site: https://shadowshield.xyz/ · Repo: https://github.com/0xsl1m/shadowshield
-> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.1
+> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.2
 
 This file is a flattened synthesis of the project's primary documentation,
 provided for LLM ingestion. Content below is derived from and includes excerpts from the
@@ -94,8 +94,9 @@ print(result.safe_text)            # safe fallback message
 > in-distribution **regression baseline, not a SOTA claim**. We publish the humbling
 > external numbers on purpose — a credible security tool shows its homework.
 > Frozen blind semantic snapshots expose the remaining gap: v1 reaches 26.7%
-> recall / 13.3% FPR and v2 reaches 0% / 10%. Run
-> `shadowshield benchmark --generalization v2`.
+> recall / 13.3% FPR, v2 reaches 0% / 10%, and v3 reaches 30% / 30%; the 90-row
+> aggregate is 22.2% / 20%. Run
+> `shadowshield benchmark --generalization all`.
 
 ---
 
@@ -240,7 +241,7 @@ shadowshield detectors          # list registered detectors
 shadowshield init > shield.yaml # write an annotated default config
 shadowshield benchmark          # run the bundled offline benchmark
 shadowshield benchmark --adversarial
-shadowshield benchmark --generalization v2  # frozen blind semantic snapshot
+shadowshield benchmark --generalization all # all frozen blind semantic snapshots
 shadowshield serve              # HTTP server + live dashboard (needs [dashboard])
 ```
 
@@ -274,7 +275,7 @@ stopped:
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.1/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.2/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 docker compose stop shadowshield
@@ -813,6 +814,8 @@ shadowshield benchmark --adversarial
 # Independently authored blind semantic snapshots
 shadowshield benchmark --generalization v1
 shadowshield benchmark --generalization v2
+shadowshield benchmark --generalization v3
+shadowshield benchmark --generalization all
 
 # External public dataset (needs the datasets extra)
 pip install "shadowshield[datasets]"
@@ -850,25 +853,28 @@ cases visible, so its perfect score is not a generalization claim.
 
 ## 3. Blind semantic snapshots (the anti-gaming result)
 
-Two balanced snapshots were authored independently without detector or regex
+Three balanced snapshots were authored independently without detector or regex
 context, then frozen. They deliberately pair attacks with benign text containing
 similar roleplay, authority, debug, and policy vocabulary.
 
-Isolation protocol: the authoring task received only the five semantic category
-names, required row/balance counts, and a request for attack/benign contrast
-pairs. It did not receive detector source, signatures, or current predictions.
-The files were frozen before detector tuning and are integrity-pinned in tests:
+Isolation protocol: the v1/v2 authoring tasks received only semantic category
+names and balance requirements; v3 received modality coverage requirements.
+None received detector source, signatures, or current predictions. The files
+were frozen before detector tuning and are integrity-pinned in tests:
 v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
-v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`.
+v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`;
+v3 SHA-256 `2285031e8143572311a522a4b6ec1a39c96a34ac2b42785f17818e8a145342bf`.
 
 | snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
 |---|---:|---:|---:|---:|---:|
 | v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
 | v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
+| v3 | 40 | 6/6/14/14 | 30% | 30% | 50% |
+| **aggregate** | **90** | **10/9/36/35** | **22.2%** | **20%** | **51.1%** |
 
-The narrow 0.6.1 fixes intentionally leave these results unchanged. They expose
-the core deterministic tier's semantic-generalization ceiling and are development
-evidence for the next classifier/conjunction tranche, not a number to hide.
+V3 was opened only after a candidate and acceptance bar were frozen. The
+candidate improved recall but missed the false-positive and accuracy gates, so
+it was discarded in full. No holdout-driven detector tuning ships in 0.6.2.
 
 ## 4. External: `deepset/prompt-injections` (out-of-distribution)
 

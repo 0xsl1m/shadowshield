@@ -242,7 +242,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset_source.add_argument(
         "--generalization",
-        choices=["v1", "v2", "all"],
+        choices=["v1", "v2", "v3", "all"],
         default=None,
         help="use an independently authored blind semantic snapshot",
     )

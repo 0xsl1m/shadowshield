@@ -15,6 +15,8 @@ shadowshield benchmark --adversarial
 # Independently authored blind semantic snapshots
 shadowshield benchmark --generalization v1
 shadowshield benchmark --generalization v2
+shadowshield benchmark --generalization v3
+shadowshield benchmark --generalization all
 
 # External public dataset (needs the datasets extra)
 pip install "shadowshield[datasets]"
@@ -52,25 +54,35 @@ cases visible, so its perfect score is not a generalization claim.
 
 ## 3. Blind semantic snapshots (the anti-gaming result)
 
-Two balanced snapshots were authored independently without detector or regex
+Three balanced snapshots were authored independently without detector or regex
 context, then frozen. They deliberately pair attacks with benign text containing
 similar roleplay, authority, debug, and policy vocabulary.
 
-Isolation protocol: the authoring task received only the five semantic category
-names, required row/balance counts, and a request for attack/benign contrast
-pairs. It did not receive detector source, signatures, or current predictions.
-The files were frozen before detector tuning and are integrity-pinned in tests:
+Isolation protocol: the v1/v2 authoring tasks received only the five semantic
+category names, required row/balance counts, and a request for attack/benign
+contrast pairs. The v3 task received modality coverage requirements but no
+detector source, signatures, or current predictions. The files were frozen before
+detector tuning and are integrity-pinned in tests:
 v1 SHA-256 `b3281ba1a42d266bb930bbb41943016d47b38dbc822ff7cff5131f3448a0248f`;
-v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`.
+v2 SHA-256 `aa8b8c81c00a55bb65180e15ff743b6241d24845b3886e8e60b52b9b23db47fa`;
+v3 SHA-256 `2285031e8143572311a522a4b6ec1a39c96a34ac2b42785f17818e8a145342bf`.
 
 | snapshot | rows | TP/FP/TN/FN | recall | FPR | balanced accuracy |
 |---|---:|---:|---:|---:|---:|
 | v1 | 30 | 4/2/13/11 | 26.7% | 13.3% | 56.7% |
 | v2 | 20 | 0/1/9/10 | 0% | 10% | 45% |
+| v3 | 40 | 6/6/14/14 | 30% | 30% | 50% |
+| **aggregate** | **90** | **10/9/36/35** | **22.2%** | **20%** | **51.1%** |
 
-The narrow 0.6.1 fixes intentionally leave these results unchanged. They expose
-the core deterministic tier's semantic-generalization ceiling and are development
-evidence for the next classifier/conjunction tranche, not a number to hide.
+The v3 snapshot was opened only after a detector candidate and acceptance bar
+were frozen. That candidate raised aggregate recall to 55.6% but failed the
+predeclared false-positive and balanced-accuracy gates (24.4% FPR; 65.6%
+balanced accuracy), so it was discarded in full. No v3-driven detector tuning
+ships in 0.6.2; the table records the unchanged released core.
+
+These snapshots expose the core deterministic tier's semantic-generalization
+ceiling and are development evidence for a fresh-corpus classifier/conjunction
+tranche, not numbers to hide or a set to tune against.
 
 ## 4. External: `deepset/prompt-injections` (out-of-distribution)
 

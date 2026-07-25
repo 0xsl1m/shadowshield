@@ -17,7 +17,13 @@ automatic). One-time setup in the Vercel dashboard:
 3. **Deploy**, then **Settings → Domains → Add `shadowshield.xyz`** (and `www`).
 
 Every push to `main` then auto-deploys (GitHub-integration auto-deploy only — no
-`vercel` CLI). Security headers + clean URLs come from [`vercel.json`](vercel.json).
+`vercel` CLI). Security headers, clean URLs, and the permanent `www`-to-apex redirect
+come from [`vercel.json`](vercel.json).
+
+The Content Security Policy permits inline CSS, progressive-enhancement JavaScript,
+and JSON-LD only by their exact SHA-256 hashes; it does not allow `unsafe-inline`.
+After intentionally editing any inline `<style>` or `<script>` block, regenerate the
+corresponding CSP hash and run `pytest tests/test_site_security.py` before deployment.
 
 **Fallback — GitHub Pages** (`.github/workflows/pages.yml`) serves the same files at
 `https://0xsl1m.github.io/shadowshield/`. `rel=canonical` points at shadowshield.xyz,
