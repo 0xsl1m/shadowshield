@@ -35,6 +35,10 @@ jobs:
       - name: Format check
         run: ruff format --check src tests
       - name: Type-check
+        # mypy targets our minimum supported syntax (3.10). Run it once on that
+        # interpreter so newer-runtime-only dependency stubs (for example NumPy
+        # 2.5's PEP 695 aliases) cannot conflict with the configured target.
+        if: matrix.python-version == '3.10'
         run: mypy src/shadowshield
       - name: Test
         run: pytest --cov=shadowshield --cov-report=term-missing --cov-report=xml
