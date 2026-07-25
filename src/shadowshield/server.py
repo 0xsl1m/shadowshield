@@ -11,22 +11,24 @@ browser) can scan text. Endpoints:
 Run it: ``shadowshield serve`` (or ``uvicorn`` against :func:`create_app`).
 Requires the ``dashboard`` extra: ``pip install shadowshield[dashboard]``.
 
-Security: this server scans untrusted text but is itself a control plane. Pass
-``api_keys`` (or set ``SHADOWSHIELD_API_KEY``) to require ``X-API-Key``/``Bearer``
-auth on ``/scan`` and ``/guard``; restrict browser origins with ``cors_origins``
-(or ``SHADOWSHIELD_CORS_ORIGINS``). With no key set it is unauthenticated - keep it
-behind your own network boundary. It never logs raw payloads beyond the shield's
-own redacting audit policy.
+Security: this server scans untrusted text but is itself a control plane. It
+fails closed without ``api_keys`` / ``SHADOWSHIELD_API_KEY`` unless local-only
+insecure mode is explicitly selected. Restrict browser origins with
+``cors_origins`` / ``SHADOWSHIELD_CORS_ORIGINS``. Default audit records are
+content-free.
 """
 
 from __future__ import annotations
 
-import sys
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ._security import (
+    ConcurrencyLimitMiddleware,
+    EarlyAuthMiddleware,
+    RequestBodyLimitMiddleware,
+    SecurityHeadersMiddleware,
     extract_key,
     is_loopback,
     key_is_valid,
@@ -40,9 +42,9 @@ from .core.types import Direction
 class ScanRequest(BaseModel):
     """Request body for /scan and /guard."""
 
-    text: str
-    direction: str = "input"
-    identity: str | None = None
+    text: str = Field(max_length=100_000)
+    direction: Direction = Direction.INPUT
+    identity: str | None = Field(default=None, max_length=256)
 
 
 _DASHBOARD_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -82,12 +84,13 @@ def create_app(
     *,
     api_keys: list[str] | None = None,
     cors_origins: list[str] | None = None,
+    allow_insecure_local: bool = False,
 ) -> Any:
     """Build a FastAPI app bound to ``shield`` (a balanced shield by default).
 
-    ``api_keys``/``cors_origins`` merge with the ``SHADOWSHIELD_API_KEY`` /
-    ``SHADOWSHIELD_CORS_ORIGINS`` env vars. When a key is configured, ``/scan`` and
-    ``/guard`` require ``X-API-Key`` or ``Bearer`` auth; ``/health`` and ``/`` stay open.
+    Direct factory mounting fails closed without an API key. Pass
+    ``allow_insecure_local=True`` only for tests or a trusted loopback-only
+    embedding; the CLI sets it automatically for loopback binds.
     """
     try:
         from fastapi import Depends, FastAPI, Header, HTTPException
@@ -100,10 +103,31 @@ def create_app(
     from . import __version__
 
     keys = resolve_api_keys(api_keys)
+    if not keys and not allow_insecure_local:
+        raise RuntimeError(
+            "refusing to create an unauthenticated HTTP app; configure "
+            "api_keys/SHADOWSHIELD_API_KEY or explicitly opt into local-only insecure mode"
+        )
     origins = resolve_cors_origins(cors_origins)
 
     guard = shield or Shield.for_mode("balanced")
-    app = FastAPI(title="ShadowShield", version=__version__)
+    app = FastAPI(
+        title="ShadowShield",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
+    app.add_middleware(RequestBodyLimitMiddleware)
+    app.add_middleware(
+        ConcurrencyLimitMiddleware,
+        protected_paths=("/scan", "/guard"),
+    )
+    app.add_middleware(
+        EarlyAuthMiddleware,
+        api_keys=keys,
+        protected_paths=("/scan", "/guard"),
+    )
 
     if origins:
         from fastapi.middleware.cors import CORSMiddleware
@@ -115,6 +139,7 @@ def create_app(
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Content-Type", "X-API-Key", "Authorization"],
         )
+    app.add_middleware(SecurityHeadersMiddleware)
 
     def require_auth(
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
@@ -142,12 +167,12 @@ def create_app(
 
     @app.post("/scan", dependencies=guarded)
     def scan(req: ScanRequest) -> dict[str, Any]:
-        result = guard.scan(req.text, direction=Direction(req.direction), identity=req.identity)
+        result = guard.scan(req.text, direction=req.direction, identity=req.identity)
         return result.to_dict()
 
     @app.post("/guard", dependencies=guarded)
     def guard_endpoint(req: ScanRequest) -> dict[str, Any]:
-        result = guard.scan(req.text, direction=Direction(req.direction), identity=req.identity)
+        result = guard.scan(req.text, direction=req.direction, identity=req.identity)
         return {
             "safe_text": result.safe_text,
             "blocked": result.blocked,
@@ -177,12 +202,17 @@ def serve(
             "Serving requires the 'dashboard' extra: pip install shadowshield[dashboard]"
         ) from exc
     if not resolve_api_keys(api_keys) and not is_loopback(host):
-        print(
-            f"WARNING: server bound to {host} with NO API key set.",
-            file=sys.stderr,
+        raise RuntimeError(
+            f"refusing to bind unauthenticated server to non-loopback host {host}; "
+            "set --api-key or SHADOWSHIELD_API_KEY"
         )
     uvicorn.run(
-        create_app(Shield.for_mode(mode), api_keys=api_keys, cors_origins=cors_origins),
+        create_app(
+            Shield.for_mode(mode),
+            api_keys=api_keys,
+            cors_origins=cors_origins,
+            allow_insecure_local=is_loopback(host),
+        ),
         host=host,
         port=port,
     )

@@ -128,8 +128,10 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             port=args.port,
             mode=args.mode,
             api_keys=args.api_key,
+            admin_keys=args.admin_key,
             cors_origins=args.cors_origin,
             policy_key=args.policy_key,
+            policy_state_path=args.policy_state_path,
         )
         return 0
 
@@ -219,6 +221,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="require this API key (X-API-Key/Bearer); repeatable. Also SHADOWSHIELD_API_KEY",
     )
     serve_p.add_argument(
+        "--admin-key",
+        action="append",
+        default=None,
+        metavar="KEY",
+        help=(
+            "independent key for control, metrics, policy, and benchmark routes. "
+            "Also SHADOWSHIELD_ADMIN_KEY"
+        ),
+    )
+    serve_p.add_argument(
         "--cors-origin",
         action="append",
         default=None,
@@ -229,7 +241,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--policy-key",
         default=None,
         metavar="KEY",
-        help="HMAC key required to accept pushed policy bundles (control mode)",
+        help=(
+            "HMAC key required to accept pushed policy bundles (control mode). "
+            "Also SHADOWSHIELD_POLICY_KEY"
+        ),
+    )
+    serve_p.add_argument(
+        "--policy-state-path",
+        default=None,
+        metavar="PATH",
+        help=(
+            "durable policy anti-replay state file (control mode). "
+            "Also SHADOWSHIELD_POLICY_STATE_PATH"
+        ),
     )
     serve_p.set_defaults(func=_cmd_serve)
     return parser

@@ -12,3 +12,7 @@ coverage.xml
 dist
 production-dist
 site
+.env
+.env.*
+*.pem
+*.key

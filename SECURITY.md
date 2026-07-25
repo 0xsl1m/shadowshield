@@ -32,7 +32,8 @@ for confirmed high-severity issues, coordinating disclosure with you.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | ✅ |
+| 0.6.x | ✅ |
+| < 0.6 | ❌ |
 
 ## Scope reminder
 

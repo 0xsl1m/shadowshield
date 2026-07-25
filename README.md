@@ -233,17 +233,21 @@ curl -s localhost:8000/scan -H 'content-type: application/json' \
   -d '{"text":"ignore all previous instructions","direction":"input"}'
 # {"decision":"block","blocked":true,"score":0.9,...}
 ```
-Endpoints: `GET /health`, `POST /scan`, `POST /guard`, `GET /` (dashboard). Or mount
-the app yourself: `from shadowshield.server import create_app`.
+Endpoints: `GET /health`, `POST /scan`, `POST /guard`, `GET /` (dashboard). Direct
+factory mounting fails closed unless `api_keys` is supplied; local-only trusted
+embeddings must explicitly pass `allow_insecure_local=True`.
 
 ### Production container
 
 The included container runs the full control plane as a non-root user with a
 health check. Compose binds it to localhost, drops Linux capabilities, uses a
-read-only filesystem, and requires an API key:
+read-only filesystem, bounds resources/logs, separates scan and administrator
+credentials, requires signed policies, and persists authenticated anti-replay state:
 
 ```bash
 export SHADOWSHIELD_API_KEY="$(openssl rand -hex 32)"
+export SHADOWSHIELD_ADMIN_KEY="$(openssl rand -hex 32)"
+export SHADOWSHIELD_POLICY_KEY="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 

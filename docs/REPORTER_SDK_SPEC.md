@@ -21,10 +21,10 @@ A shield can emit *metadata* about scans to an external collector such that **no
 payload content by construction.** "We never see your payloads" must be a property of the type, not a
 promise about a redaction flag.
 
-### The leak surface today (from the review)
-The in-memory event dict in `control.py` carries `matched` (offending substring), `span`, raw
-`identity`, and an un-redacted `preview`. Those are fine for a local, single-node dashboard the
-operator already trusts — but they **must not** cross a network boundary to a collector.
+### Closed leak surface (implemented)
+The in-memory event dict in `control.py` now uses the same content-free boundary as exported
+telemetry: no matched substring, raw identity, payload preview, or detector message is retained.
+It stores only bounded threat metadata, payload length, and whether an identity was supplied.
 
 ### Proposed type (separate from the local event)
 A distinct, export-only dataclass — call it `TelemetryEvent` — with **only** these fields:
@@ -62,10 +62,11 @@ interpolated with user text.**
 ### Reporter SDK (OSS side)
 A small, dependency-light `Reporter`:
 
-- `Reporter(endpoint, api_key, *, tenant_salt, sample_rate=1.0, flush_interval=5s, max_batch=200,
+- `Reporter(endpoint, api_key, *, tenant_salt, sample_rate=1.0, max_batch=200,
   queue_max=10_000)`.
-- `shield_with_reporter(shield, reporter)` wraps a `Shield` so every `scan()` also enqueues a
-  `TelemetryEvent`. Enqueue is **non-blocking**; a background thread batches and POSTs.
+- `attach_reporter(shield, reporter)` observes every scan and enqueues a `TelemetryEvent`.
+  Enqueue is **non-blocking**; application lifecycle code or a scheduler calls `flush()` to
+  batch and POST. The current implementation intentionally owns no background thread.
 - **Fail-open for the app, fail-closed for data:** if the collector is down, drop from a bounded
   queue (never block the request path, never grow memory). If `tenant_salt` is unset, refuse to send
   `identity_hash` at all.

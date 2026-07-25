@@ -235,6 +235,7 @@ def apply_bundle(
     floor: ProtectionFloor | None = None,
     verifier: Verifier | None = None,
     universe: set[str] | None = None,
+    baseline: ShieldConfig | None = None,
 ) -> ShieldConfig:
     """Validate ``bundle`` against the floor and return the config to apply.
 
@@ -244,6 +245,7 @@ def apply_bundle(
     keeps its current config.
     """
     floor = floor or ProtectionFloor()
+    baseline = baseline or local
 
     if verifier is not None and not verifier(bundle):
         raise PolicyRejected("signature verification failed")
@@ -255,9 +257,9 @@ def apply_bundle(
     except Exception as exc:  # malformed patch -> reject, do not weaken
         raise PolicyRejected(f"malformed bundle config: {exc}") from exc
 
-    clamped = clamp_to_floor(candidate, floor, universe=universe, baseline=local)
+    clamped = clamp_to_floor(candidate, floor, universe=universe, baseline=baseline)
 
-    degradation = protection_level(local, universe=universe) - protection_level(
+    degradation = protection_level(baseline, universe=universe) - protection_level(
         clamped, universe=universe
     )
     if degradation > floor.max_degradation_delta + 1e-9:

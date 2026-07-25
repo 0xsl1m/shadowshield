@@ -13,7 +13,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 RUN addgroup --system shadowshield \
-    && adduser --system --ingroup shadowshield --home /nonexistent shadowshield
+    && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \
+    && mkdir -p /var/lib/shadowshield \
+    && chown shadowshield:shadowshield /var/lib/shadowshield
 COPY --from=builder /build/dist/*.whl /tmp/
 RUN python -m pip install --no-cache-dir /tmp/*.whl "fastapi>=0.110" "uvicorn>=0.29" \
     && rm -f /tmp/*.whl

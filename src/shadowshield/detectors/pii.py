@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
-from .base import Detector, ScanContext, register_detector
+from .base import MAX_FINDINGS_PER_DETECTOR, Detector, ScanContext, register_detector
 
 
 @dataclass(frozen=True)
@@ -107,16 +107,27 @@ class PIIDetector(Detector):
         self, text: str, enabled: Iterable[str] | None, context: ScanContext
     ) -> list[Threat]:
         threats: list[Threat] = []
+        truncated = 0
         for pii in _SIMPLE_PATTERNS:
             if enabled is not None and pii.kind not in enabled:
                 continue
             for m in pii.pattern.finditer(text):
-                threats.append(self._make(pii.kind, pii.base_score, m.span(), context))
+                if len(threats) < MAX_FINDINGS_PER_DETECTOR:
+                    threats.append(self._make(pii.kind, pii.base_score, m.span(), context))
+                else:
+                    truncated += 1
         if enabled is None or "credit_card" in enabled:
             for m in _CARD_CANDIDATE.finditer(text):
                 digits = re.sub(r"[ -]", "", m.group(0))
                 if 13 <= len(digits) <= 19 and _luhn_valid(digits):
-                    threats.append(self._make("credit_card", 0.85, m.span(), context))
+                    if len(threats) < MAX_FINDINGS_PER_DETECTOR:
+                        threats.append(self._make("credit_card", 0.85, m.span(), context))
+                    else:
+                        truncated += 1
+        if truncated:
+            context.metadata["findings_truncated"] = (
+                int(context.metadata.get("findings_truncated", 0)) + truncated
+            )
         return threats
 
     def _presidio_threats(
@@ -127,13 +138,21 @@ class PIIDetector(Detector):
             return self._regex_threats(text, enabled, context)
         min_score = float(context.options.get("presidio_score", 0.5))
         out: list[Threat] = []
+        truncated = 0
         for res in analyzer.analyze(text=text, language="en"):
             if res.score < min_score:
                 continue
             kind = _PRESIDIO_KIND.get(res.entity_type, res.entity_type.lower())
             if enabled is not None and kind not in enabled:
                 continue
-            out.append(self._make(kind, float(res.score), (res.start, res.end), context))
+            if len(out) < MAX_FINDINGS_PER_DETECTOR:
+                out.append(self._make(kind, float(res.score), (res.start, res.end), context))
+            else:
+                truncated += 1
+        if truncated:
+            context.metadata["findings_truncated"] = (
+                int(context.metadata.get("findings_truncated", 0)) + truncated
+            )
         return out
 
     @classmethod

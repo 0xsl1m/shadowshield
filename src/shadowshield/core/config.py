@@ -96,6 +96,8 @@ class RateLimitConfig(BaseModel):
     enabled: bool = False
     max_events: int = Field(default=60, gt=0)
     window_seconds: float = Field(default=60.0, gt=0.0)
+    # Bound attacker-controlled identity cardinality in the in-memory limiter.
+    max_identities: int = Field(default=10_000, gt=0)
     # Count only flagged/blocked events toward the limit, not clean traffic.
     count_only_threats: bool = True
 

@@ -14,10 +14,20 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..core.types import Direction, Threat
-from ..utils.text import DecodedSegment, NormalizedText, extract_encoded_segments, normalize
+from ..utils.text import (
+    MAX_DECODED_SEGMENTS,
+    DecodedSegment,
+    NormalizedText,
+    extract_encoded_segments,
+    normalize,
+)
 
 if TYPE_CHECKING:
     from ..core.session import ConversationHistory
+
+# Findings are attacker-amplifiable output. Keep one noisy detector from producing
+# an unbounded response, audit record, or retained dashboard event.
+MAX_FINDINGS_PER_DETECTOR = 25
 
 
 @dataclass
@@ -59,15 +69,23 @@ class ScanContext:
         canaries: tuple[str, ...] = (),
         objective: str | None = None,
     ) -> ScanContext:
-        return cls(
+        decoded_segments = extract_encoded_segments(
+            text,
+            max_segments=MAX_DECODED_SEGMENTS + 1,
+        )
+        decoded_segments_truncated = len(decoded_segments) > MAX_DECODED_SEGMENTS
+        context = cls(
             direction=direction,
             normalized=normalize(text),
-            decoded_segments=extract_encoded_segments(text),
+            decoded_segments=decoded_segments[:MAX_DECODED_SEGMENTS],
             history=history,
             identity=identity,
             canaries=canaries,
             objective=objective,
         )
+        if decoded_segments_truncated:
+            context.metadata["decoded_segments_truncated"] = True
+        return context
 
 
 class Detector(abc.ABC):

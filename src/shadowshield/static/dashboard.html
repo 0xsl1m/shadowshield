@@ -205,15 +205,21 @@ const SEV = {critical:'var(--red)',high:'var(--peach)',medium:'var(--yellow)',lo
 const DEC = {block:'var(--red)',sanitize:'var(--peach)',flag:'var(--yellow)',allow:'var(--green)',escalate:'var(--mauve)'};
 const $ = s => document.querySelector(s);
 let API_KEY = sessionStorage.getItem('ss_key') || '';
+let ADMIN_KEY = sessionStorage.getItem('ss_admin_key') || '';
 function setKey(k){ API_KEY = k || ''; try{ sessionStorage.setItem('ss_key', API_KEY); }catch(e){} }
+function setAdminKey(k){ ADMIN_KEY = k || ''; try{ sessionStorage.setItem('ss_admin_key', ADMIN_KEY); }catch(e){} }
 async function api(path, opts){
   opts = opts || {};
   const headers = Object.assign({}, opts.headers || {});
-  if(API_KEY) headers['X-API-Key'] = API_KEY;
+  const administrative = path==='/metrics' || path.startsWith('/api/');
+  const key = administrative ? ADMIN_KEY : API_KEY;
+  if(key) headers['X-API-Key'] = key;
   const r = await fetch(path, Object.assign({}, opts, {headers}));
   if(r.status === 401){
-    const k = prompt('API key required for this ShadowShield control plane:');
-    if(k){ setKey(k); return api(path, opts); }
+    const k = prompt(administrative
+      ? 'Administrator key required for this control-plane route:'
+      : 'Scan API key required for this ShadowShield control plane:');
+    if(k){ administrative ? setAdminKey(k) : setKey(k); return api(path, opts); }
     throw new Error('401 unauthorized');
   }
   if(!r.ok){ const t = await r.text().catch(()=> ''); throw new Error(r.status+' '+t); }
@@ -313,7 +319,7 @@ async function refreshFeed(){
     $('#feedCount').textContent=`(${d.total})`;
     const el=$('#feed');
     if(!d.events.length){ el.innerHTML='<div class="empty">No scans yet — run one above.</div>'; return; }
-    let h='<table><tr><th>#</th><th>time</th><th>dir</th><th>decision</th><th>sev</th><th>score</th><th class="right">ms</th><th>preview</th></tr>';
+    let h='<table><tr><th>#</th><th>time</th><th>dir</th><th>decision</th><th>sev</th><th>score</th><th class="right">ms</th><th class="right">bytes</th></tr>';
     d.events.forEach(e=>{ h+=`<tr>
       <td class="mono muted">${e.id}</td>
       <td class="mono muted">${fmtTime(e.ts)}</td>
@@ -322,7 +328,7 @@ async function refreshFeed(){
       <td>${badge(e.severity, SEV[e.severity]||'var(--muted)')}</td>
       <td class="mono">${e.score}</td>
       <td class="mono right">${e.latency_ms}</td>
-      <td class="muted">${esc(e.preview)}</td></tr>`; });
+      <td class="mono right">${e.payload_length}</td></tr>`; });
     el.innerHTML=h+'</table>';
   }catch(e){ /* offline */ }
 }

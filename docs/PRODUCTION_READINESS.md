@@ -12,8 +12,8 @@ items require an explicit operator or maintainer decision before public launch.
 |---|---|---|
 | Correctness | Ready | Full unit/integration suite; strict mypy; Ruff lint and format |
 | Packaging | Ready | Isolated sdist/wheel build, Twine metadata check, installed-wheel CI smoke test |
-| Runtime security | Ready with configuration | API-key/Bearer auth, restricted CORS, protection floor, non-root read-only container |
-| Supply chain | Ready | PyPI OIDC publishing and CI dependency audit |
+| Runtime security | Ready with configuration | Early API-key/Bearer auth, body limits, restricted CORS, immutable protection floor, non-root read-only container |
+| Supply chain | Ready | SHA-pinned Actions, PyPI OIDC publishing, and CI dependency audit |
 | Observability | Ready for single process | Content-free telemetry, Prometheus endpoint, bounded in-memory event feed |
 | Detection quality | Beta | Adversarial baseline: 83.3% recall, 11.1% FPR; tune in shadow mode before enforcement |
 | Scale / HA | Not yet | Counters, events, configuration, and rate limits are process-local |
@@ -28,10 +28,20 @@ items require an explicit operator or maintainer decision before public launch.
 - [x] Build and validate both distribution formats and smoke-test the installed wheel.
 - [x] Audit declared dependencies in CI (local audit: no known vulnerabilities).
 - [x] Ship a non-root, health-checked, read-only Docker deployment with mandatory Compose auth.
+- [x] Bound HTTP bodies, decoded segments, findings, event pages, and rate-limit identity state.
+- [x] Reject unauthenticated requests before parsing and fail closed on exposed keyless startup.
+- [x] Keep control-plane events and default audit logs content-free by structural allowlist.
+- [x] Block oversized inputs rather than returning an unscanned suffix as safe text.
+- [x] Regress the markdown-beacon ReDoS and bound hung-judge admission.
+- [x] Gate every PR on an authenticated, non-root, read-only container smoke test.
+- [x] Split scan/admin credentials and authenticate, fsync, and strictly validate durable
+  signed last-known-good policy state.
+- [x] Bound scan concurrency and ensure permanently hung judges cannot block shutdown.
+- [x] Pin every third-party GitHub Action to a reviewed commit SHA.
 
 ## P1 — launch procedure (operator-owned)
 
-- [ ] Set a high-entropy `SHADOWSHIELD_API_KEY`; terminate TLS at a trusted ingress.
+- [ ] Set independent high-entropy `SHADOWSHIELD_API_KEY`, `SHADOWSHIELD_ADMIN_KEY`, and `SHADOWSHIELD_POLICY_KEY` values; terminate TLS at a trusted ingress.
 - [ ] Set an explicit CORS allowlist or leave CORS disabled.
 - [ ] Run the adversarial and application-specific eval sets in permissive/shadow mode.
 - [ ] Choose thresholds from measured false-positive cost; record the accepted baseline.
@@ -48,6 +58,8 @@ items require an explicit operator or maintainer decision before public launch.
 4. Publish signed container images, provenance attestations, and an SBOM from the release workflow.
 5. Calibrate detector scores on a larger independently sourced corpus and publish confidence intervals.
 6. Add soak, concurrency, and fault-injection tests for reporters, judges, and hot policy updates.
+7. Split the current administrator credential into narrower observe and mutation scopes.
+8. Add single-flight model loading and synchronized vector-index mutation.
 
 ## Go / no-go gates
 

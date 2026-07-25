@@ -16,6 +16,13 @@ venv/
 env/
 ENV/
 
+# Local secrets and deployment configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
 # Testing & coverage
 .pytest_cache/
 .coverage
