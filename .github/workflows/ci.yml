@@ -10,6 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   # Fast feedback: lint, type-check, and the full test suite WITHOUT the heavy ML
   # stack. Model-backed tests skip themselves when transformers/sentence-transformers
@@ -20,10 +23,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (no heavy ML deps)
@@ -35,9 +40,18 @@ jobs:
       - name: Format check
         run: ruff format --check src tests
       - name: Type-check
+        # mypy targets our minimum supported syntax (3.10). Run it once on that
+        # interpreter so newer-runtime-only dependency stubs (for example NumPy
+        # 2.5's PEP 695 aliases) cannot conflict with the configured target.
+        if: matrix.python-version == '3.10'
         run: mypy src/shadowshield
       - name: Test
-        run: pytest --cov=shadowshield --cov-report=term-missing
+        run: pytest --cov=shadowshield --cov-report=term-missing --cov-report=xml
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: matrix.python-version == '3.14'
+        with:
+          name: coverage
+          path: coverage.xml
 
   # Heavy: exercise the optional ML classifier + vector-similarity layers against
   # real models. Separate job so a slow model download never blocks PR feedback.
@@ -46,8 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: core
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Install (with transformers + vectors)
@@ -64,8 +80,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: core
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Build
@@ -76,7 +94,101 @@ jobs:
         run: |
           pip install twine
           twine check dist/*
-      - uses: actions/upload-artifact@v5
+      - name: Smoke-test installed wheel
+        run: |
+          python -m venv /tmp/shadowshield-smoke
+          /tmp/shadowshield-smoke/bin/pip install dist/*.whl
+          /tmp/shadowshield-smoke/bin/shadowshield --version
+          /tmp/shadowshield-smoke/bin/shadowshield scan --text "hello"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: dist
           path: dist/*
+
+  dependency-audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - name: Audit declared dependencies
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip_audit .
+
+  container:
+    name: container security smoke
+    runs-on: ubuntu-latest
+    needs: core
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --tag shadowshield-ci:${{ github.sha }} .
+      - name: Verify fail-closed startup and hardened runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="shadowshield-ci:${{ github.sha }}"
+          name="shadowshield-ci"
+          cleanup() {
+            result=$?
+            trap - EXIT
+            if [ "$result" -ne 0 ] && docker inspect "$name" >/dev/null 2>&1; then
+              docker logs "$name" || true
+              docker inspect --format \
+                'state={{.State.Status}} health={{.State.Health.Status}} error={{json .State.Error}}' \
+                "$name" || true
+            fi
+            docker rm --force "$name" >/dev/null 2>&1 || true
+            exit "$result"
+          }
+          trap cleanup EXIT
+
+          if docker run --rm "$image"; then
+            echo "image started without required keys"
+            exit 1
+          fi
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "shadowshield"
+
+          docker run --detach --name "$name" \
+            --read-only --tmpfs /tmp:size=16m \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --health-interval 1s --health-timeout 3s \
+            --health-start-period 1s --health-retries 3 \
+            -e SHADOWSHIELD_API_KEY=ci-api-key \
+            -e SHADOWSHIELD_ADMIN_KEY=ci-admin-key \
+            -e SHADOWSHIELD_POLICY_KEY=ci-policy-key \
+            -e SHADOWSHIELD_POLICY_STATE_PATH=/tmp/policy-state.json \
+            -p 127.0.0.1:18080:8000 "$image"
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18080/health | grep '"status":"ok"'
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'content-type: application/json' \
+            -d '{"text":"malformed"' http://127.0.0.1:18080/scan)" = "401"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'x-api-key: ci-api-key' -H 'content-type: application/json' \
+            -d '{"text":"hello","direction":"input"}' http://127.0.0.1:18080/scan)" = "200"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          Path("/tmp/oversized.json").write_text(json.dumps({"text": "x" * 1_100_000}))
+          PY
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            -H 'x-api-key: ci-api-key' -H 'content-type: application/json' \
+            --data-binary @/tmp/oversized.json http://127.0.0.1:18080/scan)" = "413"
+          for _ in $(seq 1 10); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$name")"
+            if [ "$status" = "healthy" ]; then break; fi
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$name")" = "healthy"

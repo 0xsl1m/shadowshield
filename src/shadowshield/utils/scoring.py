@@ -1,10 +1,9 @@
 """Aggregation of many per-detector threats into one payload-level verdict.
 
-The aggregation philosophy is **noisy-or with severity weighting**: independent
-detectors each raise the overall suspicion, but no single weak signal can be
-washed out by averaging. A confident HIGH from one detector should dominate even
-if ten other detectors stayed silent — averaging would dilute it, which is the
-wrong failure mode for security.
+The aggregation philosophy is **noisy-or with severity weighting** across
+independent detector/category signals. Repeated matches from the same detector
+and category contribute their strongest score once, preventing an ordinary list
+of low-risk items from amplifying into a block.
 """
 
 from __future__ import annotations
@@ -16,7 +15,8 @@ from .text import truncate  # noqa: F401  (re-exported for convenience)
 def aggregate_score(threats: list[Threat], weights: dict[str, float] | None = None) -> float:
     """Combine weighted detector scores via a noisy-or.
 
-    Each threat contributes ``p_i = clamp(score * weight)``. The combined
+    Each independent detector/category signal contributes
+    ``p_i = clamp(max_score * weight)``. The combined
     probability that *something* is wrong is ``1 - Π(1 - p_i)`` — monotonic,
     bounded in ``[0, 1]``, and order-independent. More corroborating detectors
     push the score up; one strong detector already pushes it high.
@@ -25,7 +25,13 @@ def aggregate_score(threats: list[Threat], weights: dict[str, float] | None = No
         return 0.0
     weights = weights or {}
     complement = 1.0
-    for t in threats:
+    strongest: dict[tuple[str, object], Threat] = {}
+    for threat in threats:
+        key = (threat.detector, threat.category)
+        current = strongest.get(key)
+        if current is None or threat.score > current.score:
+            strongest[key] = threat
+    for t in strongest.values():
         w = weights.get(t.detector, 1.0)
         p = max(0.0, min(1.0, t.score * w))
         complement *= 1.0 - p

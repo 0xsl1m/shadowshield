@@ -67,6 +67,7 @@ _CONFUSABLES = {
 # char, so \b after it would drop the padding and break the length check.
 _B64_RE = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/=])")
 _HEX_RE = re.compile(r"\b(?:0x)?[0-9a-fA-F]{16,}\b")
+MAX_DECODED_SEGMENTS = 24
 
 
 @dataclass(slots=True)
@@ -130,7 +131,12 @@ def _is_mostly_printable(data: bytes, threshold: float = 0.85) -> bool:
     return printable / len(data) >= threshold
 
 
-def extract_encoded_segments(text: str, *, min_decoded_len: int = 6) -> list[DecodedSegment]:
+def extract_encoded_segments(
+    text: str,
+    *,
+    min_decoded_len: int = 6,
+    max_segments: int | None = None,
+) -> list[DecodedSegment]:
     """Find and decode base64/hex blobs that resolve to readable text.
 
     Only segments that decode to *mostly printable* ASCII are returned — random
@@ -152,6 +158,8 @@ def extract_encoded_segments(text: str, *, min_decoded_len: int = 6) -> list[Dec
             decoded = raw.decode("ascii", errors="replace")
             if len(decoded.strip()) >= min_decoded_len:
                 out.append(DecodedSegment("base64", token, decoded, m.span()))
+                if max_segments is not None and len(out) >= max_segments:
+                    return out
 
     for m in _HEX_RE.finditer(text):
         token = m.group(0).removeprefix("0x")
@@ -165,6 +173,8 @@ def extract_encoded_segments(text: str, *, min_decoded_len: int = 6) -> list[Dec
             decoded = raw.decode("ascii", errors="replace")
             if len(decoded.strip()) >= min_decoded_len:
                 out.append(DecodedSegment("hex", m.group(0), decoded, m.span()))
+                if max_segments is not None and len(out) >= max_segments:
+                    return out
 
     return out
 

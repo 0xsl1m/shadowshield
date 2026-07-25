@@ -15,6 +15,7 @@ decoded meaning.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
@@ -324,6 +325,90 @@ _MULTILINGUAL_SIGNATURES: tuple[Signature, ...] = (
 _ALL_SIGNATURES: tuple[Signature, ...] = (
     _OVERRIDE_SIGNATURES + _FAKE_FRAME_SIGNATURES + _INDIRECT_SIGNATURES + _MULTILINGUAL_SIGNATURES
 )
+_BASE_SIGNATURES = _OVERRIDE_SIGNATURES + _FAKE_FRAME_SIGNATURES + _INDIRECT_SIGNATURES
+_MULTILINGUAL_GROUPS: tuple[tuple[tuple[Signature, ...], tuple[str, ...]], ...] = (
+    (
+        _MULTILINGUAL_SIGNATURES[0:5],
+        (
+            "ignorier",
+            "missachte",
+            "vergiss",
+            "verwirf",
+            "überschreibe",
+            "ab jetzt",
+            "ab sofort",
+            "ab nun",
+            "du bist",
+            "zeig",
+            "gib",
+            "nenne",
+            "verrat",
+            "offenbare",
+            "anweisung",
+            "systemnachricht",
+        ),
+    ),
+    (
+        _MULTILINGUAL_SIGNATURES[5:8],
+        (
+            "ignora",
+            "olvida",
+            "descarta",
+            "caso omiso",
+            "anula",
+            "ahora eres",
+            "a partir de ahora",
+            "muestra",
+            "revela",
+            "dime",
+            "imprime",
+            "instrucciones",
+            "reglas",
+            "prompt",
+            "sistema",
+        ),
+    ),
+    (
+        _MULTILINGUAL_SIGNATURES[8:11],
+        (
+            "instruction",
+            "consigne",
+            "règle",
+            "ordre",
+            "tu es",
+            "à partir",
+            "montre",
+            "révèle",
+            "affiche",
+            "dis-moi",
+        ),
+    ),
+    (
+        _MULTILINGUAL_SIGNATURES[11:13],
+        (
+            "ignora",
+            "dimentica",
+            "trascura",
+            "scarta",
+            "istruzion",
+            "ora sei",
+            "d'ora in poi",
+        ),
+    ),
+    (
+        _MULTILINGUAL_SIGNATURES[13:15],
+        (
+            "instrução",
+            "instruções",
+            "ordens",
+            "regras",
+            "comandos",
+            "agora você",
+            "agora és",
+            "a partir de agora",
+        ),
+    ),
+)
 
 
 @register_detector
@@ -338,7 +423,7 @@ class PromptInjectionDetector(Detector):
         targets = self._targets(text, context)
 
         for source, body in targets:
-            for sig in _ALL_SIGNATURES:
+            for sig in self._candidate_signatures(body):
                 m = sig.pattern.search(body)
                 if not m:
                     continue
@@ -376,6 +461,15 @@ class PromptInjectionDetector(Detector):
                 )
             )
         return threats
+
+    @staticmethod
+    def _candidate_signatures(body: str) -> Iterable[Signature]:
+        """Skip costly language regexes unless their required vocabulary exists."""
+        yield from _BASE_SIGNATURES
+        folded = body.casefold()
+        for signatures, cues in _MULTILINGUAL_GROUPS:
+            if any(cue in folded for cue in cues):
+                yield from signatures
 
     @staticmethod
     def _targets(text: str, context: ScanContext) -> list[tuple[str, str]]:

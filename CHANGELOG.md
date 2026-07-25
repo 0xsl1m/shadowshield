@@ -4,6 +4,59 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-07-25
+
+Operability, agentic guarding, and an open-core foundation.
+
+### Added
+- **Full control dashboard** (`shadowshield serve --control`) — a self-contained,
+  no-CDN single-page console: live scan + threat feed, metrics/analytics (inline SVG),
+  a config control panel (toggle detectors, switch mode, tune thresholds/weights,
+  hot-swapped into the running shield), and a one-click benchmark runner.
+- **Server hardening** — fail-closed API-key/Bearer auth, independent scan/admin
+  credentials, configurable CORS, pre-parse body limits, bounded concurrency,
+  browser security headers, and hidden framework schemas.
+- **Content-free default audit events** — redacted logs now use a strict metadata
+  allowlist and omit payload previews, matches, detector messages/metadata, and raw
+  identities.
+- **Prometheus `/metrics`** endpoint on the control server (monotonic scan/decision/
+  severity/detector counters + latency quantile gauges).
+- **Pull-based policy with a protection floor** (`shadowshield.core.policy`) — signed
+  bundle verification, clamp-to-floor (always-on detectors, threshold ceiling), a
+  degradation cap, authenticated and crash-durable anti-replay/last-known-good state,
+  and fail-safe behavior. Exposed at `GET/POST /api/policy`.
+- **Content-free reporter SDK** (`shadowshield.reporter`, `core.telemetry`) — opt-in,
+  bounded, non-blocking export of scan *metadata* with no payload leakage by construction
+  (identity/canary hashed, no `matched`/`preview`).
+- **MCP tool-guard integration** (`shadowshield.integrations.ToolGuard`,
+  `build_mcp_server`) — transport-agnostic allow/block verdicts for tool calls and
+  untrusted tool results.
+- **`shadowshield schema`** — emit the config JSON Schema for editor/CI validation.
+- **`shadowshield owasp`** + `core.coverage` — honest OWASP LLM Top 10 (2025) coverage
+  map (covered / partial / out-of-scope).
+- **Adversarial benchmark** — `shadowshield benchmark --adversarial` over a harder bundled
+  set (obfuscated/multilingual/indirect attacks + tricky hard negatives); publishes
+  deliberately sub-100% numbers.
+- **Span coverage** added to the exfiltration, jailbreak, and canary detectors.
+- **GOVERNANCE.md** — public MIT-forever commitment for the engine.
+- **Production container** — multi-stage, non-root image plus a read-only,
+  capability-dropped, resource-bounded Compose service with mandatory independent
+  scan/admin/policy secrets, durable policy state, and rotated logs.
+- **Release gates** — Python 3.10–3.14 CI, an 80% coverage floor, declared-dependency
+  audit, installed-wheel smoke test, real-model integration, and hardened-container
+  startup/auth/body-limit smoke test. Third-party Actions are SHA-pinned.
+- Strategy/research docs under `docs/`: UPGRADE_OPPORTUNITIES, MARKET_LANDSCAPE,
+  SAAS_STRATEGY, PLAN_REVIEW, REPORTER_SDK_SPEC, OWASP_LLM_TOP10, NEXT_STEPS,
+  PRODUCTION_READINESS.
+
+### Notes
+- Test count grew with suites for auth, control, policy, telemetry, spans, MCP, CLI, and
+  the adversarial set. The multi-tenant SaaS backend remains intentionally unbuilt,
+  gated behind design-partner validation (see docs/SAAS_STRATEGY.md).
+- Findings, decoded segments, telemetry/event fields, rate-limit identity state, and
+  judge work are bounded. Oversized input now blocks instead of releasing an
+  unscanned suffix, and markdown-beacon parsing is linear without boundary bypasses.
+
 ## [0.5.1] — 2026-06-13
 
 ### Added

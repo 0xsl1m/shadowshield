@@ -84,3 +84,72 @@ def test_rate_limiter_disabled_is_noop() -> None:
     for _ in range(100):
         result = limiter.check(result, context=ctx)
     assert not result.blocked
+
+
+def test_rate_limiter_bounds_identity_cardinality() -> None:
+    cfg = RateLimitConfig(
+        enabled=True,
+        max_events=100,
+        max_identities=3,
+        count_only_threats=True,
+    )
+    limiter = RateLimitResponder(cfg)
+
+    clean = ss.ScanResult(text="x", direction=Direction.INPUT)
+    for i in range(100):
+        ctx = ScanContext.build("x", direction=Direction.INPUT, identity=f"clean-{i}")
+        limiter.check(clean, context=ctx)
+    assert len(limiter._events) == 0
+
+    for i in range(10):
+        suspicious = ss.ScanResult(
+            text="x",
+            direction=Direction.INPUT,
+            threats=[
+                ss.Threat(
+                    category=ss.ThreatCategory.JAILBREAK,
+                    severity=ss.Severity.MEDIUM,
+                    score=0.5,
+                    detector="test",
+                    message="test",
+                )
+            ],
+        )
+        ctx = ScanContext.build("x", direction=Direction.INPUT, identity=f"attacker-{i}")
+        limiter.check(suspicious, context=ctx)
+    assert len(limiter._events) == 3
+
+
+def test_identity_rotation_cannot_evict_live_rate_limit_history() -> None:
+    cfg = RateLimitConfig(
+        enabled=True,
+        max_events=2,
+        max_identities=2,
+        count_only_threats=True,
+    )
+    limiter = RateLimitResponder(cfg)
+
+    def suspicious(identity: str) -> ss.ScanResult:
+        result = ss.ScanResult(
+            text="x",
+            direction=Direction.INPUT,
+            threats=[
+                ss.Threat(
+                    category=ss.ThreatCategory.JAILBREAK,
+                    severity=ss.Severity.MEDIUM,
+                    score=0.5,
+                    detector="test",
+                    message="test",
+                )
+            ],
+        )
+        context = ScanContext.build("x", direction=Direction.INPUT, identity=identity)
+        return limiter.check(result, context=context)
+
+    suspicious("victim")
+    suspicious("victim")
+    suspicious("other")
+    suspicious("rotating-new-identity")
+
+    assert suspicious("victim").metadata["rate_limited"] is True
+    assert len(limiter._events) == 2

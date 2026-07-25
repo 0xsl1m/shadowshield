@@ -9,6 +9,8 @@ systems. This directory is the deep-dive companion to the top-level
 - [Benchmarks](BENCHMARKS.md) — measured detection/FPR on the bundled set **and** the public `deepset` set (regex-only vs. classifier).
 - [Comparison](COMPARISON.md) — competitive audit + capability matrix vs. LLM Guard, LlamaFirewall, NeMo, Guardrails, Rebuff.
 - [Releasing](RELEASING.md) — how ShadowShield ships to PyPI (Trusted Publishing, no tokens).
+- [Production readiness](PRODUCTION_READINESS.md) — release gates, deployment
+  checklist, known scale limits, and the next engineering milestones.
 - [Security model](security-model.md) — threat taxonomy, layers, trust boundaries.
 - [Detectors](detectors.md) — every built-in detector and what it catches.
 - [Configuration](configuration.md) — modes, policy, weights, and YAML reference.

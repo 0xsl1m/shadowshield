@@ -233,8 +233,27 @@ curl -s localhost:8000/scan -H 'content-type: application/json' \
   -d '{"text":"ignore all previous instructions","direction":"input"}'
 # {"decision":"block","blocked":true,"score":0.9,...}
 ```
-Endpoints: `GET /health`, `POST /scan`, `POST /guard`, `GET /` (dashboard). Or mount
-the app yourself: `from shadowshield.server import create_app`.
+Endpoints: `GET /health`, `POST /scan`, `POST /guard`, `GET /` (dashboard). Direct
+factory mounting fails closed unless `api_keys` is supplied; local-only trusted
+embeddings must explicitly pass `allow_insecure_local=True`.
+
+### Production container
+
+The included container runs the full control plane as a non-root user with a
+health check. Compose binds it to localhost, drops Linux capabilities, uses a
+read-only filesystem, bounds resources/logs, separates scan and administrator
+credentials, requires signed policies, and persists authenticated anti-replay state:
+
+```bash
+export SHADOWSHIELD_API_KEY="$(openssl rand -hex 32)"
+export SHADOWSHIELD_ADMIN_KEY="$(openssl rand -hex 32)"
+export SHADOWSHIELD_POLICY_KEY="$(openssl rand -hex 32)"
+docker compose up --build
+```
+
+Terminate TLS at a trusted ingress before exposing it beyond localhost. See the
+[production-readiness roadmap](docs/PRODUCTION_READINESS.md) for launch gates,
+known scale limits, and the operator checklist.
 
 ---
 
@@ -448,6 +467,49 @@ Guardrails, Guardrails AI, and Rebuff in **[docs/COMPARISON.md](docs/COMPARISON.
 | **Tool-call guarding** | ❌ | ❌ | ❌ | ✅ |
 | Reproducible benchmark + number | ❌ | ❌ | 🟡 | ✅ |
 | Cost on clean traffic | low | **high** | med | low (heavy tiers gated) |
+
+---
+
+## Operations & control plane
+
+Run the HTTP server with a full **control dashboard** (live scan + threat feed, metrics,
+config control panel, one-click benchmark). It is self-contained (no CDN — runs air-gapped):
+
+```bash
+pip install "shadowshield[dashboard]"
+shadowshield serve --control                       # http://127.0.0.1:8000
+shadowshield serve --control --api-key SECRET      # require X-API-Key / Bearer auth
+```
+
+- **Auth & CORS** (both servers): `--api-key` (repeatable) or `SHADOWSHIELD_API_KEY`;
+  `--cors-origin` or `SHADOWSHIELD_CORS_ORIGINS`. Unset = open (keep it on localhost).
+- **Prometheus metrics**: `GET /metrics` exposes scan/decision/severity/detector counters
+  and latency quantiles.
+- **Fleet policy with a protection floor**: `GET/POST /api/policy` applies signed config
+  bundles that **can never disable protection below a local floor** (`--policy-key`).
+  Programmatic API: `shadowshield.core.policy` (`apply_bundle`, `ProtectionFloor`).
+- **Content-free telemetry (opt-in)**: `from shadowshield import Reporter, attach_reporter`
+  — exports scan *metadata* (no payloads, hashed identity) to a collector, off the hot path.
+- **MCP tool guarding**: `from shadowshield.integrations import ToolGuard` — allow/block
+  verdicts for agent tool calls and untrusted tool results.
+
+```bash
+shadowshield schema      # config JSON Schema (editor/CI validation)
+shadowshield owasp       # OWASP LLM Top 10 (2025) coverage map
+shadowshield benchmark --adversarial   # honest, harder, sub-100% numbers
+```
+
+## Documentation
+
+| Doc | What |
+|---|---|
+| [docs/UPGRADE_OPPORTUNITIES.md](docs/UPGRADE_OPPORTUNITIES.md) | Engineering roadmap (impact × effort) |
+| [docs/OWASP_LLM_TOP10.md](docs/OWASP_LLM_TOP10.md) | OWASP LLM Top 10 (2025) coverage |
+| [docs/REPORTER_SDK_SPEC.md](docs/REPORTER_SDK_SPEC.md) | Content-free telemetry + protection-floor spec |
+| [docs/MARKET_LANDSCAPE.md](docs/MARKET_LANDSCAPE.md) | Competitive landscape & positioning |
+| [docs/SAAS_STRATEGY.md](docs/SAAS_STRATEGY.md) | Open-core SaaS strategy |
+| [docs/PLAN_REVIEW.md](docs/PLAN_REVIEW.md) | Multi-model review of the plan |
+| [GOVERNANCE.md](GOVERNANCE.md) | MIT-forever commitment |
 
 ---
 

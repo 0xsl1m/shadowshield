@@ -41,6 +41,17 @@ def load_builtin() -> list[EvalExample]:
     return _parse_jsonl(data.read_text(encoding="utf-8").splitlines())
 
 
+def load_adversarial() -> list[EvalExample]:
+    """A harder bundled set: obfuscated/multilingual/indirect attacks + tricky hard negatives.
+
+    Deliberately includes attacks the regex/signature tier alone may miss (so recall is
+    *not* 100% on the core install) and benign text laden with trigger words. Use it to
+    publish honest numbers, not a marketing 100%.
+    """
+    data = resources.files("shadowshield.eval.data").joinpath("adversarial_benchmark.jsonl")
+    return _parse_jsonl(data.read_text(encoding="utf-8").splitlines())
+
+
 def load_jsonl(
     path: str | Path,
     *,

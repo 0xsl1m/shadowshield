@@ -12,6 +12,7 @@ or from the CLI: ``shadowshield benchmark``.
 
 from .dataset import (
     EvalExample,
+    load_adversarial,
     load_builtin,
     load_csv,
     load_huggingface,
@@ -22,6 +23,7 @@ from .harness import BenchmarkReport, CategoryStat, evaluate_shield
 __all__ = [
     "EvalExample",
     "load_builtin",
+    "load_adversarial",
     "load_jsonl",
     "load_csv",
     "load_huggingface",

@@ -11,9 +11,12 @@ from .agentdojo import (
     make_agentdojo_defense,
     scan_messages_for_injection,
 )
+from .mcp import ToolGuard, build_mcp_server
 
 __all__ = [
     "make_agentdojo_defense",
     "scan_messages_for_injection",
     "ShadowShieldVerdict",
+    "ToolGuard",
+    "build_mcp_server",
 ]

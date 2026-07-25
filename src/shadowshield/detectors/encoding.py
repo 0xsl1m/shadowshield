@@ -52,6 +52,18 @@ class EncodingObfuscationDetector(Detector):
                 )
             )
 
+        if context.metadata.get("decoded_segments_truncated"):
+            threats.append(
+                Threat(
+                    category=ThreatCategory.ENCODING_OBFUSCATION,
+                    severity=Severity.HIGH,
+                    score=0.8,
+                    detector=self.name,
+                    message="Encoded-segment limit exceeded; possible resource-exhaustion attack.",
+                    metadata={"technique": "encoded_segment_limit"},
+                )
+            )
+
         for seg in context.decoded_segments:
             threats.append(
                 Threat(

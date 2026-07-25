@@ -6,6 +6,7 @@ __pycache__/
 .eggs/
 build/
 dist/
+production-dist/
 wheels/
 *.egg
 
@@ -14,6 +15,13 @@ wheels/
 venv/
 env/
 ENV/
+
+# Local secrets and deployment configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
 
 # Testing & coverage
 .pytest_cache/

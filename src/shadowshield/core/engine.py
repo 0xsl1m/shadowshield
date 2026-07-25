@@ -18,7 +18,10 @@ symmetric, two-way protection.
 
 from __future__ import annotations
 
-import concurrent.futures
+import json
+import math
+import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -32,7 +35,7 @@ from ..core.types import (
     ThreatCategory,
 )
 from ..detectors.alignment import AlignmentCheckDetector, AlignmentJudge
-from ..detectors.base import Detector, ScanContext
+from ..detectors.base import MAX_FINDINGS_PER_DETECTOR, Detector, ScanContext
 from ..detectors.llm_check import LLMJudge, LLMSelfCheckDetector
 from ..responders.base import Responder
 from ..responders.rate_limiter import RateLimitResponder
@@ -55,6 +58,11 @@ _ALIGNMENT_DETECTOR_NAME = AlignmentCheckDetector.name
 # Detectors that the engine drives separately (gated / context-injected), not in
 # the cheap deterministic loop.
 _GATED_DETECTORS = frozenset({_LLM_DETECTOR_NAME, _ALIGNMENT_DETECTOR_NAME})
+_MAX_FINDINGS_PER_SCAN = 50
+_MAX_THREAT_MESSAGE_CHARS = 1_024
+_MAX_THREAT_MATCH_CHARS = 256
+_MAX_THREAT_METADATA_BYTES = 4_096
+_JUDGE_WORKERS = 4
 
 
 def _stronger(a: Decision, b: Decision) -> Decision:
@@ -82,11 +90,12 @@ class Engine:
         self._audit = audit
         self._llm_judge = llm_judge
         self._alignment_judge = alignment_judge
-        # Judges are user-supplied callables that may hang or make network calls.
-        # Run them in a small pool so we can enforce a hard timeout — a hung judge
-        # must never block the request path. Only created when a judge exists.
-        self._judge_pool: concurrent.futures.ThreadPoolExecutor | None = (
-            concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="ss-judge")
+        # User-supplied judges may hang or make network calls. Each admitted call
+        # runs in a bounded daemon thread: request time is limited, queue growth is
+        # impossible, and a permanently hung client cannot prevent process exit.
+        # A timed-out call retains its slot until the callable really finishes.
+        self._judge_slots: threading.BoundedSemaphore | None = (
+            threading.BoundedSemaphore(_JUDGE_WORKERS)
             if (llm_judge is not None or alignment_judge is not None)
             else None
         )
@@ -94,6 +103,13 @@ class Engine:
         self._weights = {
             name: config.detector_config(name).weight for name in self._detector_names()
         }
+        # Result observers (e.g. the telemetry reporter). Invoked after every evaluate,
+        # so guard()/filter()/scan()/async all report through a single chokepoint.
+        self._observers: list[Callable[[ScanResult, float, str | None], None]] = []
+
+    def add_observer(self, callback: Callable[[ScanResult, float, str | None], None]) -> None:
+        """Register a ``(result, latency_ms, identity)`` callback run after each scan."""
+        self._observers.append(callback)
 
     def _detector_names(self) -> list[str]:
         return [d.name for d in self._detectors]
@@ -112,6 +128,7 @@ class Engine:
         # Bound the work: oversized payloads are scanned as a truncated prefix so
         # a multi-megabyte input can't exhaust CPU. The original text is preserved
         # on the result; only the scanned region is capped.
+        start = time.perf_counter()
         max_chars = self._config.max_input_chars
         oversized = bool(max_chars) and len(text) > max_chars
         scan_text = text[:max_chars] if oversized else text
@@ -144,9 +161,16 @@ class Engine:
                 )
             )
 
+        threats = self._cap_findings(threats, context)
+
         score = aggregate_score(threats, self._weights)
         severity = aggregate_severity(threats, score)
         decision = self._decide(score, severity)
+        # No unscanned suffix may ever flow downstream. The result preserves the
+        # original for caller inspection, but oversized payloads always receive
+        # the blocker's safe fallback in every mode and policy configuration.
+        if oversized:
+            decision = _stronger(decision, Decision.BLOCK)
 
         result = ScanResult(
             text=text,
@@ -156,13 +180,40 @@ class Engine:
             severity=severity,
             decision=decision,
         )
+        truncated_findings = int(context.metadata.get("findings_truncated", 0))
+        if truncated_findings:
+            result.metadata["findings_truncated"] = truncated_findings
+            result.metadata["findings_total"] = len(threats) + truncated_findings
 
         # Rate-limit pre-pass can escalate to BLOCK based on identity history.
         result = self._rate_limiter.check(result, context=context)
+        result.threats = self._cap_findings(
+            result.threats,
+            context,
+            preserve_detector=self._rate_limiter.name,
+        )
+        result.score = aggregate_score(result.threats, self._weights)
+        result.severity = aggregate_severity(result.threats, result.score)
+        if result.metadata.get("rate_limited"):
+            result.severity = max(result.severity, Severity.HIGH)
+        truncated_findings = int(context.metadata.get("findings_truncated", 0))
+        if truncated_findings:
+            result.metadata["findings_truncated"] = truncated_findings
+            result.metadata["findings_total"] = len(result.threats) + truncated_findings
 
         result = self._apply_responders(result, context)
         self._record(result, context)
+        self._notify_observers(result, (time.perf_counter() - start) * 1000.0, identity)
         return result
+
+    def _notify_observers(
+        self, result: ScanResult, latency_ms: float, identity: str | None
+    ) -> None:
+        for cb in self._observers:
+            try:
+                cb(result, latency_ms, identity)
+            except Exception:  # an observer must never break the request path
+                continue
 
     # ------------------------------------------------------------------ #
     def _run_cheap_detectors(self, text: str, context: ScanContext) -> list[Threat]:
@@ -205,17 +256,47 @@ class Engine:
     def _with_timeout(self, fn: Callable[..., Any], timeout: float) -> Callable[..., Any]:
         """Wrap a user judge so a hang can't block the request beyond ``timeout``.
 
-        The judge runs in the pool; if it overruns, ``future.result`` raises
-        ``TimeoutError``, which the calling detector's fail-safe ``except`` turns
+        The judge runs in a daemon thread; if it overruns, ``TimeoutError`` is
+        raised, which the calling detector's fail-safe ``except`` turns
         into a low-severity "unavailable" note rather than a crash or a hang.
-        (An over-running judge thread is left to finish/leak — the standard,
-        accepted trade-off for thread-based timeouts in Python.)
+        At most four judge calls may be outstanding. A timed-out running call
+        retains its admission slot until it really finishes, so later scans fail
+        fast instead of accumulating behind hung workers.
         """
 
         def wrapped(*args: Any) -> Any:
-            assert self._judge_pool is not None  # only built when a judge exists
-            future = self._judge_pool.submit(fn, *args)
-            return future.result(timeout=timeout)
+            slots = self._judge_slots
+            assert slots is not None
+            if not slots.acquire(blocking=False):
+                raise RuntimeError("judge capacity exhausted")
+            done = threading.Event()
+            outcome: dict[str, Any] = {}
+
+            def invoke() -> None:
+                try:
+                    outcome["value"] = fn(*args)
+                except BaseException as exc:
+                    outcome["error"] = exc
+                finally:
+                    slots.release()
+                    done.set()
+
+            worker = threading.Thread(target=invoke, name="ss-judge", daemon=True)
+            try:
+                worker.start()
+            except Exception:
+                slots.release()
+                raise
+            if not done.wait(timeout):
+                raise TimeoutError
+            if "error" in outcome:
+                error = outcome["error"]
+                if isinstance(error, Exception):
+                    raise error
+                raise RuntimeError(f"judge terminated with {type(error).__name__}")
+            if "value" not in outcome:
+                raise RuntimeError("judge exited without a result")
+            return outcome["value"]
 
         return wrapped
 
@@ -223,10 +304,106 @@ class Engine:
     def _safe_scan(det: Detector, text: str, context: ScanContext) -> list[Threat]:
         """A detector that raises must never take down the request path."""
         try:
-            return det.scan(text, context=context)
+            findings = [
+                Engine._bound_threat(threat, text_length=len(text))
+                for threat in det.scan(text, context=context)
+            ]
+            if len(findings) <= MAX_FINDINGS_PER_DETECTOR:
+                return findings
+            context.metadata["findings_truncated"] = (
+                int(context.metadata.get("findings_truncated", 0))
+                + len(findings)
+                - MAX_FINDINGS_PER_DETECTOR
+            )
+            return sorted(
+                findings,
+                key=lambda threat: (threat.severity, threat.score),
+                reverse=True,
+            )[:MAX_FINDINGS_PER_DETECTOR]
         except Exception:  # pragma: no cover - defensive
             # Fail-safe: drop this detector's contribution, keep the others.
             return []
+
+    @staticmethod
+    def _bound_threat(threat: Threat, *, text_length: int) -> Threat:
+        """Bound plugin/judge-controlled fields before they reach results or logs."""
+        if not isinstance(threat, Threat):
+            raise TypeError("detectors must return Threat instances")
+        if not isinstance(threat.category, ThreatCategory):
+            raise TypeError("threat category must be a ThreatCategory")
+        if not isinstance(threat.severity, Severity):
+            raise TypeError("threat severity must be a Severity")
+        try:
+            score = float(threat.score)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise TypeError("threat score must be a finite number") from exc
+        if not math.isfinite(score):
+            raise TypeError("threat score must be a finite number")
+        threat.score = max(0.0, min(1.0, score))
+        threat.detector = truncate(str(threat.detector), 128)
+        threat.message = truncate(str(threat.message), _MAX_THREAT_MESSAGE_CHARS)
+        if threat.matched is not None:
+            threat.matched = truncate(str(threat.matched), _MAX_THREAT_MATCH_CHARS)
+        if (
+            not isinstance(threat.span, tuple)
+            or len(threat.span) != 2
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool) for value in threat.span
+            )
+            or not (0 <= threat.span[0] <= threat.span[1] <= text_length)
+        ):
+            threat.span = None
+        try:
+            metadata_json = json.dumps(
+                threat.metadata,
+                default=lambda value: f"<{type(value).__name__}>",
+                ensure_ascii=False,
+            )
+            canonical_metadata = json.loads(metadata_json)
+            if not isinstance(canonical_metadata, dict):
+                raise TypeError("threat metadata must serialize to an object")
+            metadata_size = len(metadata_json.encode("utf-8"))
+        except Exception:
+            threat.metadata = {"metadata_dropped": True}
+        else:
+            if metadata_size > _MAX_THREAT_METADATA_BYTES:
+                threat.metadata = {
+                    "metadata_truncated": True,
+                    "original_bytes": metadata_size,
+                }
+            else:
+                threat.metadata = canonical_metadata
+        return threat
+
+    @staticmethod
+    def _cap_findings(
+        threats: list[Threat],
+        context: ScanContext,
+        *,
+        preserve_detector: str | None = None,
+    ) -> list[Threat]:
+        if len(threats) <= _MAX_FINDINGS_PER_SCAN:
+            return threats
+        context.metadata["findings_truncated"] = (
+            int(context.metadata.get("findings_truncated", 0))
+            + len(threats)
+            - _MAX_FINDINGS_PER_SCAN
+        )
+        ordered = sorted(
+            threats,
+            key=lambda threat: (threat.severity, threat.score),
+            reverse=True,
+        )
+        if preserve_detector is None:
+            return ordered[:_MAX_FINDINGS_PER_SCAN]
+        preserved = next(
+            (threat for threat in ordered if threat.detector == preserve_detector),
+            None,
+        )
+        if preserved is None:
+            return ordered[:_MAX_FINDINGS_PER_SCAN]
+        remainder = [threat for threat in ordered if threat is not preserved]
+        return [preserved, *remainder[: _MAX_FINDINGS_PER_SCAN - 1]]
 
     def _decide(self, score: float, severity: Severity) -> Decision:
         decision = self._config.policy.decide(severity)
@@ -243,12 +420,37 @@ class Engine:
         return result
 
     def _record(self, result: ScanResult, context: ScanContext) -> None:
-        event = result.to_dict()
-        event["identity"] = context.identity
-        if not self._audit.redact:
-            event["text"] = truncate(result.text, 400)
+        if self._audit.redact:
+            # Redaction is an allowlist, not a best-effort scrub. Detector messages,
+            # matches, metadata, identities, and previews may all contain attacker-
+            # controlled text, secrets, PII, judge output, or decoded payloads.
+            event: dict[str, Any] = {
+                "direction": result.direction.value,
+                "decision": result.decision.value,
+                "score": round(result.score, 4),
+                "severity": result.severity.label,
+                "is_safe": result.is_safe,
+                "blocked": result.blocked,
+                "sanitized": result.sanitized_text is not None,
+                "payload_length": len(result.text),
+                "identity_present": context.identity is not None,
+                "findings_total": result.metadata.get("findings_total", len(result.threats)),
+                "findings_truncated": result.metadata.get("findings_truncated", 0),
+                "threats": [
+                    {
+                        "category": threat.category.value,
+                        "severity": threat.severity.label,
+                        "score": round(threat.score, 4),
+                        "detector": threat.detector,
+                        "span": list(threat.span) if threat.span else None,
+                    }
+                    for threat in result.threats
+                ],
+            }
         else:
-            event["text_preview"] = truncate(result.text, 80)
+            event = result.to_dict()
+            event["identity"] = context.identity
+            event["text"] = truncate(result.text, 400)
         # Clean, threat-free scans are logged at DEBUG (quiet by default);
         # anything noteworthy is logged at INFO.
         notable = bool(result.threats) or not result.is_safe

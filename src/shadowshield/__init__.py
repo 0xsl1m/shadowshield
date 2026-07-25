@@ -45,6 +45,16 @@ from .core import (
     ThreatCategory,
 )
 from .core.canary import CanaryRegistry, CanaryToken
+from .core.coverage import format_coverage_text, owasp_coverage
+from .core.policy import (
+    PolicyBundle,
+    PolicyRejected,
+    ProtectionFloor,
+    apply_bundle,
+    make_hmac_verifier,
+    sign_bundle,
+)
+from .core.telemetry import TelemetryEvent, ThreatMeta, to_telemetry
 from .detectors import (
     Detector,
     LLMJudgement,
@@ -58,9 +68,10 @@ from .detectors import (
 from .detectors.alignment import AlignmentJudge, AlignmentVerdict
 from .middleware.decorators import get_default_shield, protect, set_default_shield
 from .plugins import PluginManager, ShadowShieldPlugin
+from .reporter import Reporter, attach_reporter
 from .responders import Responder, spotlight
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 __all__ = [
     "__version__",
@@ -96,6 +107,22 @@ __all__ = [
     "CanaryRegistry",
     "AlignmentJudge",
     "AlignmentVerdict",
+    # fleet policy (protection floor)
+    "ProtectionFloor",
+    "PolicyBundle",
+    "PolicyRejected",
+    "apply_bundle",
+    "sign_bundle",
+    "make_hmac_verifier",
+    # telemetry / reporting
+    "TelemetryEvent",
+    "ThreatMeta",
+    "to_telemetry",
+    "Reporter",
+    "attach_reporter",
+    # compliance coverage
+    "owasp_coverage",
+    "format_coverage_text",
     "TransformerDetector",
     "VectorSimilarityDetector",
     # extension

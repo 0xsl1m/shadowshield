@@ -51,9 +51,10 @@ class AuditLog:
     """Append-only JSONL audit trail for scan decisions.
 
     Each call to :meth:`record` writes exactly one JSON object on its own line.
-    When ``redact_payloads`` is set (the default), raw offending text is never
-    written — only a short, truncated preview — so the audit log can't itself
-    become a data-leak vector.
+    When ``redact_payloads`` is set (the default), events use a strict allowlist
+    of content-free decision and detector metadata. Payload text, previews,
+    matched substrings, detector messages/metadata, and raw identities are omitted
+    so the audit log cannot itself become a data-leak vector.
     """
 
     def __init__(self, config: LoggingConfig) -> None:

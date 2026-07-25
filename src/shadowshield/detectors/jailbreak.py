@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
-from .base import Detector, ScanContext, register_detector
+from .base import Detector, ScanContext, locate_span, register_detector
 
 _PATTERNS: tuple[tuple[str, Severity, float, str], ...] = (
     (
@@ -101,6 +101,7 @@ class JailbreakDetector(Detector):
                         detector=self.name,
                         message=message,
                         matched=m.group(0)[:160],
+                        span=locate_span(text, m.group(0), m.span()),
                     )
                 )
         return threats
