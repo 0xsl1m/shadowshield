@@ -49,7 +49,7 @@ one — measured on `deepset/prompt-injections` (test split, 116 ex):
 
 Full results + reproduction in **[BENCHMARKS.md](BENCHMARKS.md)**. The takeaways:
 the deterministic tier is high-precision/low-recall, multilingual signatures
-(de/es/fr/it/pt) and the classifier each add recall at **zero false-positive
+(de/es/fr/it/pt/zh) and the classifier each add recall at **zero false-positive
 cost**, and even then we publish a humbling 48% rather than a cherry-picked figure. Per the 2026
 distribution-shift literature ("When Benchmarks Lie"), in-distribution scores
 collapse under real shift — so the bundled 100% only proves we don't regress on
@@ -144,7 +144,7 @@ rotation. None are blockers for an internal/self-hosted deployment.
 - ✅ **On PyPI** — `pip install shadowshield`, auto-published via OIDC Trusted Publishing.
 - ✅ **Vector-similarity self-hardening tier** (Rebuff layer 3) — `use_vectors=True`,
   `shield.harden()`. Bundled multilingual corpus; +1.7pp recall at 0% FPR.
-- ✅ **Multilingual signatures** (de/es/fr/it/pt) — +5pp recall on deepset, 0% FPR.
+- ✅ **Multilingual signatures** (de/es/fr/it/pt/zh) — +5pp recall on deepset, 0% FPR.
 - ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; ready to run.
 - ✅ **Presidio PII backend** — `pii` detector `backend="presidio"|"both"`, fail-safe to regex.
 - ✅ **FastAPI server + dashboard** — `shadowshield serve` (`[dashboard]` extra).
