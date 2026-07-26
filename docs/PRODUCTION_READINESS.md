@@ -14,7 +14,7 @@ must be resolved before exposing the optional HTTP control plane publicly.
 | Correctness | Ready | 320 unit/integration cases; strict mypy; Ruff lint/format; CodeQL extended scanning |
 | Packaging | Ready | Hash-locked build environment, byte-for-byte repeat build gate, Twine validation, installed-wheel smoke test |
 | Runtime security | Ready with configuration | Early API-key/Bearer auth, bounded/deadlined body intake, detector-failure policy, restricted CORS, immutable protection floor, non-root read-only container |
-| Supply chain | Ready | Digest/SHA-pinned build inputs, PyPI OIDC, exact-green-main release gates, immutable image/evidence handling, pre-push vulnerability gate, anonymous GHCR digest pull, registry-verified SLSA and CycloneDX attestations |
+| Supply chain | Ready | Digest/SHA-pinned build inputs, PyPI OIDC, exact-green-main release gates, base/lock/per-extra vulnerability gates, immutable image/evidence handling, anonymous GHCR digest pull, registry-verified SLSA and CycloneDX attestations |
 | Observability | Ready for single process | Content-free telemetry, detector-error counters, Prometheus endpoint, bounded in-memory event feed |
 | Detection quality | Beta | Curated adversarial: 100%/0% FPR; blind v1–v3 aggregate: 22.2%/20%; v3: 30%/30%; deepset core: 23.3%/0% |
 | Scale / HA | Not yet | Counters, events, configuration, and rate limits are process-local |
@@ -79,6 +79,8 @@ must be resolved before exposing the optional HTTP control plane publicly.
 - [x] Make benchmark evidence fail visibly on warmup, readiness, or detector
   errors and report class-conditional per-slice confusion metrics with 95%
   Wilson confidence intervals.
+- [x] Resolve and vulnerability-audit every declared optional dependency stack
+  independently in CI, including development and combined `all` graphs.
 
 ## P1 — launch procedure (operator-owned)
 
@@ -112,7 +114,6 @@ must be resolved before exposing the optional HTTP control plane publicly.
    promoted, already-scanned OCI artifacts.
 9. Pin optional model revisions, pre-cache them for offline production startup,
    and bound model-loading time.
-10. Add vulnerability-audit matrices for every supported optional dependency stack.
 
 ## Go / no-go gates
 

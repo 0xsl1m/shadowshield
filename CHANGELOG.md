@@ -4,6 +4,13 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Supply chain and CI
+- Added a strict, dynamically discovered CI matrix that resolves and audits every
+  declared optional dependency stack, including development and combined `all`
+  graphs, so new extras cannot silently bypass vulnerability scanning.
+
 ## [0.6.3] — 2026-07-25
 
 Post-launch reliability, request-intake, observability, performance, and
