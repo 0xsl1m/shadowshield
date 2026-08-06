@@ -1,0 +1,18 @@
+ShadowShield deployed ({{ .Values.replicaCount }} replica(s)).
+
+1. Confirm the required secret exists:
+     kubectl get secret {{ include "shadowshield.secretName" . }}
+
+   It must define SHADOWSHIELD_API_KEY, SHADOWSHIELD_ADMIN_KEY,
+   SHADOWSHIELD_POLICY_KEY, and SHADOWSHIELD_POLICY_STATE_KEY (>=32 bytes,
+   independent of the policy key).
+
+2. Reach the control plane inside the cluster:
+     kubectl port-forward svc/{{ include "shadowshield.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+   Then call it with the API key, e.g.:
+     curl -H "X-API-Key: $SHADOWSHIELD_API_KEY" http://localhost:{{ .Values.service.port }}/health
+
+3. The pod is hardened like the reference compose stack: read-only root
+   filesystem, all capabilities dropped, no privilege escalation, non-root
+   user, digest-pinned image, bounded resources, /tmp as a bounded emptyDir.

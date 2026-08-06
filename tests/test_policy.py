@@ -55,6 +55,27 @@ def test_unsigned_rejected_when_verifier_required() -> None:
         apply_bundle(_local(), b, verifier=make_hmac_verifier(KEY), universe=UNIVERSE)
 
 
+def test_unsigned_rejected_by_default_when_no_verifier() -> None:
+    # Fail-closed: omitting the verifier must never silently skip signature checks.
+    b = PolicyBundle(config={"block_threshold": 0.5})
+    with pytest.raises(PolicyRejected, match="allow_unsigned"):
+        apply_bundle(_local(), b, universe=UNIVERSE)
+
+
+def test_unsigned_applied_only_with_explicit_opt_in() -> None:
+    # The opt-in exists for loopback-only embeddings that authenticate out-of-band.
+    b = PolicyBundle(config={"block_threshold": 0.5})
+    out = apply_bundle(_local(), b, allow_unsigned=True, universe=UNIVERSE)
+    assert out.block_threshold == pytest.approx(0.5)
+
+
+def test_signed_bundle_needs_no_opt_in() -> None:
+    b = PolicyBundle(config={"block_threshold": 0.5}, bundle_id="b1", issued_at=1.0)
+    b.signature = sign_bundle(b, KEY)
+    out = apply_bundle(_local(), b, verifier=make_hmac_verifier(KEY), universe=UNIVERSE)
+    assert out.block_threshold == pytest.approx(0.5)
+
+
 # --------------------------------------------------------------------------- #
 # Protection floor
 # --------------------------------------------------------------------------- #
@@ -66,7 +87,7 @@ def test_always_on_detector_cannot_be_disabled() -> None:
             "disabled_detectors": ["canary_leak"],
         }
     )
-    out = apply_bundle(_local(), b, universe=UNIVERSE)  # no verifier => skip sig check
+    out = apply_bundle(_local(), b, allow_unsigned=True, universe=UNIVERSE)
     assert out.detector_config("prompt_injection").enabled is True
     assert out.detector_config("canary_leak").enabled is True
 
@@ -74,7 +95,7 @@ def test_always_on_detector_cannot_be_disabled() -> None:
 def test_block_threshold_clamped_to_ceiling() -> None:
     b = PolicyBundle(config={"block_threshold": 1.0})
     floor = ProtectionFloor(max_block_threshold=0.8)
-    out = apply_bundle(_local(), b, floor=floor, universe=UNIVERSE)
+    out = apply_bundle(_local(), b, floor=floor, allow_unsigned=True, universe=UNIVERSE)
     assert out.block_threshold == pytest.approx(0.8)
 
 
@@ -84,7 +105,7 @@ def test_degradation_cap_rejects_wholesale_weakening() -> None:
     b = PolicyBundle(config={"block_threshold": 0.8, "detectors": weak})
     floor = ProtectionFloor(max_degradation_delta=0.2)
     with pytest.raises(PolicyRejected):
-        apply_bundle(_local(), b, floor=floor, universe=UNIVERSE)
+        apply_bundle(_local(), b, floor=floor, allow_unsigned=True, universe=UNIVERSE)
 
 
 def test_benign_bundle_applied() -> None:
@@ -92,7 +113,7 @@ def test_benign_bundle_applied() -> None:
     b = PolicyBundle(
         config={"block_threshold": 0.5, "detectors": {"prompt_injection": {"weight": 2.0}}}
     )
-    out = apply_bundle(_local(), b, universe=UNIVERSE)
+    out = apply_bundle(_local(), b, allow_unsigned=True, universe=UNIVERSE)
     assert out.block_threshold == pytest.approx(0.5)
     assert out.detector_config("prompt_injection").weight == pytest.approx(2.0)
 
@@ -100,7 +121,7 @@ def test_benign_bundle_applied() -> None:
 def test_malformed_bundle_rejected() -> None:
     b = PolicyBundle(config={"block_threshold": "not-a-number"})
     with pytest.raises(PolicyRejected):
-        apply_bundle(_local(), b, universe=UNIVERSE)
+        apply_bundle(_local(), b, allow_unsigned=True, universe=UNIVERSE)
 
 
 def test_protection_level_monotonic() -> None:
@@ -124,7 +145,7 @@ def test_clamp_is_idempotent() -> None:
 def test_always_on_weight_cannot_be_zeroed() -> None:
     # Zeroing an always-on detector's weight would silence it while it reports "enabled".
     b = PolicyBundle(config={"detectors": {"prompt_injection": {"weight": 0.0}}})
-    out = apply_bundle(_local(), b, universe=UNIVERSE)
+    out = apply_bundle(_local(), b, allow_unsigned=True, universe=UNIVERSE)
     assert out.detector_config("prompt_injection").enabled is True
     assert out.detector_config("prompt_injection").weight >= 1.0  # clamped to baseline
 
@@ -138,19 +159,34 @@ def test_bundle_cannot_rewrite_policy_mapping() -> None:
         "critical": "allow",
     }
     with pytest.raises(PolicyRejected, match="policy"):
-        apply_bundle(_local(), PolicyBundle(config={"policy": allow_all}), universe=UNIVERSE)
+        apply_bundle(
+            _local(),
+            PolicyBundle(config={"policy": allow_all}),
+            allow_unsigned=True,
+            universe=UNIVERSE,
+        )
 
 
 def test_bundle_forbidden_fields_rejected() -> None:
     for cfg in ({"mode": "permissive"}, {"max_input_chars": 10**9}, {"raise_on_block": False}):
         with pytest.raises(PolicyRejected):
-            apply_bundle(_local(), PolicyBundle(config=cfg), universe=UNIVERSE)
+            apply_bundle(
+                _local(),
+                PolicyBundle(config=cfg),
+                allow_unsigned=True,
+                universe=UNIVERSE,
+            )
 
 
 def test_wholesale_weight_zeroing_rejected_by_degradation_cap() -> None:
     weak = {n: {"weight": 0.0} for n in UNIVERSE if n not in {"prompt_injection", "canary_leak"}}
     with pytest.raises(PolicyRejected):
-        apply_bundle(_local(), PolicyBundle(config={"detectors": weak}), universe=UNIVERSE)
+        apply_bundle(
+            _local(),
+            PolicyBundle(config={"detectors": weak}),
+            allow_unsigned=True,
+            universe=UNIVERSE,
+        )
 
 
 def test_protection_level_drops_when_weight_zeroed() -> None:

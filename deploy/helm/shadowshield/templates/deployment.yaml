@@ -1,0 +1,97 @@
+{{- $digest := required "image.digest is required — pin the release sha256 digest (tags are mutable)" .Values.image.digest -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "shadowshield.fullname" . }}
+  labels:
+    {{- include "shadowshield.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "shadowshield.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "shadowshield.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Defense in depth on top of the AppArmor default where available.
+        container.apparmor.security.beta.kubernetes.io/shadowshield: runtime/default
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: shadowshield
+          image: "{{ .Values.image.repository }}@{{ $digest }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.command | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: {{ include "shadowshield.secretName" . }}
+          env:
+            - name: SHADOWSHIELD_CORS_ORIGINS
+              value: {{ .Values.config.corsOrigins | quote }}
+            - name: SHADOWSHIELD_POLICY_STATE_PATH
+              value: /var/lib/shadowshield/policy-state.json
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.persistence.policyState.enabled }}
+            - name: policy-state
+              mountPath: /var/lib/shadowshield
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+        {{- if .Values.persistence.policyState.enabled }}
+        - name: policy-state
+          persistentVolumeClaim:
+            claimName: {{ include "shadowshield.fullname" . }}-policy-state
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

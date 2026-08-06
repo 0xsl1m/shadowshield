@@ -56,6 +56,7 @@ class Shield:
         isolate_flagged: bool = False,
         use_transformer: bool | str = False,
         use_vectors: bool | str = False,
+        calibrator: Any | None = None,
     ) -> None:
         self.config = config or ShieldConfig.for_mode(Mode.BALANCED)
         self._audit = AuditLog(self.config.logging)
@@ -104,6 +105,7 @@ class Shield:
             audit=self._audit,
             llm_judge=llm_judge,
             alignment_judge=alignment_judge,
+            calibrator=calibrator,
         )
 
     # ------------------------------------------------------------------ #
@@ -276,6 +278,19 @@ class Shield:
                 det.add_attack(text)
                 hardened = True
         return hardened
+
+    # ------------------------------------------------------------------ #
+    # Incremental streaming
+    # ------------------------------------------------------------------ #
+    def stream_scanner(self, **kwargs: Any) -> Any:
+        """Create a :class:`~shadowshield.core.stream.StreamScanner` over this shield.
+
+        Keyword arguments are forwarded to ``StreamScanner`` (``direction``,
+        ``identity``, ``scan_interval_chars``, ``carry_chars``, ``block_on``).
+        """
+        from .stream import StreamScanner
+
+        return StreamScanner(self, **kwargs)
 
     # ------------------------------------------------------------------ #
     # Agentic guarding: tool calls & tool results are untrusted too

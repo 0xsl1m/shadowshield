@@ -35,6 +35,7 @@ layers on top.
 | `mode` | preset posture (strict/balanced/permissive) |
 | `raise_on_block` | make `Shield.scan()` raise on a block (default false) |
 | `fail_closed_on_detector_error` | block if any detector raises; failures are always reported as content-free metadata (strict defaults true) |
+| `parallel_detectors` | fan cheap detectors out across a bounded thread pool (default false). Verdicts, ordering, and error accounting are identical to sequential — only wall-clock latency changes |
 | `block_threshold` | aggregate score that forces a block regardless of policy |
 | `policy.{none..critical}` | severity → decision mapping |
 | `detectors.<name>.enabled` | per-detector toggle |
