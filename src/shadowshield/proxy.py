@@ -33,7 +33,9 @@ namespace where FastAPI names do not exist, breaking request injection.
 
 import asyncio
 import hashlib
+import hmac
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -203,13 +205,47 @@ def _response_headers(upstream_headers: httpx.Headers) -> dict[str, str]:
     }
 
 
+_IDENTITY_HMAC_KEY: bytes | None = None
+
+
+def _identity_hmac_key() -> bytes:
+    """Per-process secret for keyed identity fingerprints (not persisted)."""
+    global _IDENTITY_HMAC_KEY
+    if _IDENTITY_HMAC_KEY is None:
+        _IDENTITY_HMAC_KEY = os.urandom(32)
+    return _IDENTITY_HMAC_KEY
+
+
 def _identity_for(request: Any) -> str | None:
-    """Stable, non-reversible caller identity for rate limiting."""
+    """Stable, non-reversible caller identity for rate limiting.
+
+    HMAC-SHA256 with an ephemeral per-process key: identities stay stable for
+    the process lifetime but leaked fingerprints are useless offline.
+    """
     supplied = extract_key(request.headers.get("x-api-key"), request.headers.get("authorization"))
     if supplied:
-        return "key:" + hashlib.sha256(supplied.encode("utf-8")).hexdigest()[:16]
+        digest = hmac.new(
+            _identity_hmac_key(), supplied.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return "key:" + digest[:16]
     client = getattr(request, "client", None)
     return f"ip:{client.host}" if client is not None else None
+
+
+def _is_safe_upstream_path(full_path: str) -> bool:
+    """Validate the client-controlled suffix appended to the fixed upstream.
+
+    The upstream base URL is operator-configured and constant; the passthrough
+    route appends a request-supplied path. Reject anything that could escape
+    the upstream's path space or confuse URL parsing downstream (traversal
+    segments, backslashes, control characters, embedded userinfo/authority
+    tricks). Starlette has already percent-decoded the path at this point.
+    """
+    if not full_path or "\\" in full_path or "@" in full_path:
+        return False
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in full_path):
+        return False
+    return all(segment not in (".", "..") for segment in full_path.split("/"))
 
 
 def create_proxy_app(
@@ -420,7 +456,11 @@ def create_proxy_app(
     )
     async def passthrough(full_path: str, request: Request) -> Any:
         # Blind forwarding for non-chat endpoints (model lists, embeddings,
-        # files). These carry no completion text to guard.
+        # files). These carry no completion text to guard. The path suffix is
+        # client-controlled; validate it so it cannot escape the configured
+        # upstream's path space.
+        if not _is_safe_upstream_path(full_path):
+            return Response(status_code=400, content=b'{"error":{"message":"invalid path"}}')
         target = upstream + "/" + full_path
         if request.url.query:
             target += "?" + request.url.query
