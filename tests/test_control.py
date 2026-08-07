@@ -981,3 +981,52 @@ def test_control_factory_rejects_pairwise_reused_credentials(
             policy_state_path=str(tmp_path / "state.json"),
             policy_state_key=secrets["state"],
         )
+
+
+def test_reload_endpoint_disabled_without_config_file() -> None:
+    c = TestClient(_open_app())
+    rep = c.post("/api/reload")
+    assert rep.status_code == 503
+
+
+def test_reload_endpoint_hot_swaps_yaml_config(tmp_path: Path) -> None:
+    cfg = tmp_path / "shield.yaml"
+    cfg.write_text("mode: strict\nblock_threshold: 0.55\n", encoding="utf-8")
+    app = create_control_app("balanced", allow_insecure_local=True, config_file=str(cfg))
+    c = TestClient(app)
+    rep = c.post("/api/reload")
+    assert rep.status_code == 200
+    body = rep.json()
+    assert body["reloaded"] is True
+    assert body["config"]["mode"] == "strict"
+    assert body["config"]["block_threshold"] == 0.55
+
+
+def test_reload_rejects_config_that_breaches_floor(tmp_path: Path) -> None:
+    cfg = tmp_path / "shield.yaml"
+    cfg.write_text(
+        "mode: permissive\nblock_threshold: 0.99\n"
+        "detectors:\n"
+        "  jailbreak:\n    enabled: false\n"
+        "  encoding_obfuscation:\n    enabled: false\n"
+        "  data_exfiltration:\n    enabled: false\n"
+        "  pii:\n    enabled: false\n"
+        "  anomaly:\n    enabled: false\n",
+        encoding="utf-8",
+    )
+    app = create_control_app("strict", allow_insecure_local=True, config_file=str(cfg))
+    c = TestClient(app)
+    rep = c.post("/api/reload")
+    assert rep.status_code == 400
+    # Previous shield is intact.
+    assert c.get("/api/config").json()["mode"] == "strict"
+
+
+def test_reload_rejects_missing_file(tmp_path: Path) -> None:
+    app = create_control_app(
+        "balanced",
+        allow_insecure_local=True,
+        config_file=str(tmp_path / "absent.yaml"),
+    )
+    c = TestClient(app)
+    assert c.post("/api/reload").status_code == 400

@@ -62,8 +62,10 @@ print(result.safe_text)            # safe fallback message
   false-positive rate on hard negatives** in the bundled benchmark.
 - **Proven, reproducibly.** Ships an eval harness + offline benchmark:
   `shadowshield benchmark`. Loads public datasets (PINT/deepset/InjecAgent) too.
-- **Drop-in integrations.** OpenAI-compatible clients, LangChain, decorators,
-  context managers, **async** (`ascan`). Or call `shield.scan()` directly.
+- **Drop-in integrations.** A zero-code **reverse-proxy gateway** for any
+  OpenAI-compatible endpoint, plus OpenAI/Anthropic/LiteLLM/LangChain wrappers,
+  pure-ASGI middleware, RAG retriever guards, decorators, context managers, and
+  **async** (`ascan`). Or call `shield.scan()` directly.
 - **Extensible & lightweight.** Add a detector/responder in ~10 lines or ship a
   plugin. Tiny core dependency set; ML/PII/datasets are optional extras.
 
@@ -76,9 +78,10 @@ print(result.safe_text)            # safe fallback message
 > in-distribution **regression baseline, not a SOTA claim**. We publish the humbling
 > external numbers on purpose — a credible security tool shows its homework.
 > The frozen blind semantic snapshots are harder still: v1 reaches 26.7% recall /
-> 13.3% FPR, v2 reaches 0% / 10%, and v3 reaches 30% / 30%; the 90-row aggregate
-> is 22.2% / 20%. Run `shadowshield benchmark --generalization all`; these gaps
-> are public by design.
+> 13.3% FPR, v2 reaches 0% / 10%, v3 reaches 30% / 30%, and the 58-example v4
+> snapshot (indirect tool-result, multilingual, and semantic-pretext attacks)
+> reaches 58.6% / 6.9%; the 148-row aggregate is 36.5% / 14.9%. Run
+> `shadowshield benchmark --generalization all`; these gaps are public by design.
 
 ---
 
@@ -224,7 +227,9 @@ shadowshield init > shield.yaml # write an annotated default config
 shadowshield benchmark          # run the bundled offline benchmark
 shadowshield benchmark --adversarial
 shadowshield benchmark --generalization all # all frozen blind semantic snapshots
+shadowshield calibrate --input benchmark.json --output calibration.json # isotonic score calibration
 shadowshield serve              # HTTP server + live dashboard (needs [dashboard])
+shadowshield proxy --upstream https://api.openai.com --port 8100  # gateway mode (needs [dashboard])
 ```
 
 ### 9. HTTP server (any language / a browser dashboard)
@@ -244,6 +249,62 @@ Endpoints: `GET /health` (liveness), `GET /ready` (readiness), `POST /scan`,
 `api_keys` is supplied; local-only trusted embeddings must explicitly pass
 `allow_insecure_local=True`.
 
+### 10. Gateway mode — guardrails without code changes
+
+Put ShadowShield *in front of* any OpenAI-compatible endpoint and point your
+existing SDK at the proxy instead. Chat messages are scanned pre-flight (a
+blocked request returns an OpenAI-style `403` and never reaches the upstream),
+completions are scanned post-flight, and malicious **SSE streams are cut
+mid-flight** with a conventional `finish_reason="content_filter"` chunk:
+
+```bash
+pip install "shadowshield[dashboard]"
+shadowshield proxy --upstream https://api.openai.com --port 8100 \
+  --api-key "$GATEWAY_KEY"        # proxy auth; upstream key stays in Authorization
+```
+
+```python
+client = OpenAI(base_url="http://localhost:8100/v1", api_key=os.environ["OPENAI_API_KEY"])
+```
+
+The same protection embeds in-process via `ShieldASGIMiddleware`
+(`shadowshield.middleware.asgi`) for any ASGI app — SSE passes through there,
+so use the proxy when you stream.
+
+### 11. Streaming completions — cut the stream mid-flight
+
+`StreamScanner` scans a completion *while it streams* (bounded memory,
+carry-over window so split signatures still match) and returns a terminal
+verdict the moment the stream must stop:
+
+```python
+scanner = shield.stream_scanner(scan_interval_chars=256)
+for event in openai_stream:                    # any streaming SDK
+    terminal = scanner.feed(event.delta_text)
+    if terminal is not None:
+        break                                  # close the stream NOW
+final = scanner.finalize()
+```
+
+### 12. Anthropic, LiteLLM, and RAG pipelines
+
+```python
+from shadowshield.middleware import (
+    ShieldedAnthropicClient, shielded_completion, scan_retrieved_chunks,
+)
+
+anthropic_client = ShieldedAnthropicClient(Anthropic(), shield)  # messages.create guarded
+completion = shielded_completion(shield)                         # wraps litellm.completion
+
+# Retrieved chunks are untrusted: drop poisoned documents before the prompt.
+report = scan_retrieved_chunks(shield, retrieved_chunks, on_threat="drop")
+prompt = build_prompt(query, report.safe_chunks)
+```
+
+Duck-typed wrappers for LlamaIndex (`ShieldedLlamaIndexRetriever`) and Haystack
+(`ShieldedHaystackRetriever`) filter poisoned nodes/documents inside each
+framework's retriever contract.
+
 ### Production container
 
 The included container runs the full control plane as a non-root user with a
@@ -257,7 +318,7 @@ export SHADOWSHIELD_ADMIN_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.7.0/container-digest.txt)"
 docker compose pull
 docker compose up -d
 ```
@@ -272,20 +333,31 @@ it beyond localhost. See the
 [production-readiness roadmap](docs/PRODUCTION_READINESS.md) for launch gates,
 known scale limits, and the operator checklist.
 
+**Kubernetes:** `deploy/helm/shadowshield/` ships a chart with the same
+hardening (digest-pinned image — install fails without it, read-only root
+filesystem, all capabilities dropped, non-root, seccomp, bounded `/tmp`,
+external secrets, policy-state PVC, health probes):
+
+```bash
+helm install shadowshield deploy/helm/shadowshield \
+  --set image.digest=sha256:<release-digest> \
+  --set secrets.existingSecret=shadowshield-secrets
+```
+
 Upgrading a control-plane volume from 0.6.0 requires an offline re-key because
 0.6.0 authenticated durable state with the policy-signing key:
 
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.7.0/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 # Stop every writer and snapshot the volume before running the migration.
 docker compose stop shadowshield
 docker compose run --rm --no-deps shadowshield \
   shadowshield migrate-policy-state --path /var/lib/shadowshield/policy-state.json
-# Preserve the reported .pre-0.6.1.bak file, then start 0.6.3.
+# Preserve the reported .pre-0.6.1.bak file, then start 0.7.0.
 docker compose up -d
 ```
 

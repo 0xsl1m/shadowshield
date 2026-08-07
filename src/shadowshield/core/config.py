@@ -127,6 +127,13 @@ class ShieldConfig(BaseModel):
     # bounded, content-free result metadata even when this policy is disabled.
     fail_closed_on_detector_error: bool = False
 
+    # When True, the independent cheap detectors fan out across a small thread
+    # pool instead of running sequentially. Findings, ordering, truncation and
+    # error accounting are identical to the sequential path — only wall-clock
+    # latency changes. Off by default; enable when several slow detectors
+    # (e.g. local transformer/vector models) dominate scan latency.
+    parallel_detectors: bool = False
+
     # Aggregate score at/above which the payload is considered "not safe" even
     # if no single detector hit CRITICAL. Lower = more cautious.
     block_threshold: float = Field(default=0.65, ge=0.0, le=1.0)

@@ -240,7 +240,11 @@ class RequestBodyLimitMiddleware:
                 message = terminal_message
                 terminal_message = None
                 return message
-            return {"type": "http.request", "body": b"", "more_body": False}
+            # The body has been fully delivered. Delegate to the real channel so
+            # disconnect listeners (e.g. Starlette's StreamingResponse) observe
+            # http.disconnect instead of spinning on fabricated empty bodies.
+            message = await receive()
+            return dict(message) if isinstance(message, dict) else {"type": "http.disconnect"}
 
         await self.app(scope, replay_receive, send)
 

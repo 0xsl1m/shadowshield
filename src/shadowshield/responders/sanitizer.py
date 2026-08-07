@@ -33,13 +33,23 @@ class SanitizeResponder(Responder):
 
         # Collect spans against the ORIGINAL text only (decoded-segment threats
         # carry no original span and are handled by stripping below).
-        spans = sorted(
+        raw = sorted(
             ((t.span, t.category.value) for t in result.threats if t.span is not None),
             key=lambda s: s[0][0],
-            reverse=True,  # replace right-to-left so earlier indices stay valid
         )
+        # Merge overlapping/adjacent spans so nested detections yield one clean
+        # placeholder instead of stacked "[redacted:…]" markers. Categories of the
+        # merged span are joined for auditability.
+        spans: list[tuple[tuple[int, int], str]] = []
+        for (start, end), category in raw:
+            if spans and start <= spans[-1][0][1]:
+                (ps, pe), pc = spans[-1]
+                merged_cat = pc if category in pc.split("|") else f"{pc}|{category}"
+                spans[-1] = ((ps, max(pe, end)), merged_cat)
+            else:
+                spans.append(((start, end), category))
 
-        for (start, end), category in spans:
+        for (start, end), category in reversed(spans):  # right-to-left: indices stay valid
             start = max(0, min(start, len(text)))
             end = max(start, min(end, len(text)))
             text = text[:start] + f"[redacted:{category}]" + text[end:]

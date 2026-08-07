@@ -24,11 +24,15 @@ from math import isfinite
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
+import structlog
+
 from .core.telemetry import TelemetryEvent, to_telemetry
 from .core.types import ScanResult
 
 if TYPE_CHECKING:
     from .core.shield import Shield
+
+_log = structlog.get_logger(__name__)
 
 Transport = Callable[[list[dict[str, Any]]], None]
 
@@ -57,6 +61,7 @@ class Reporter:
         retry_backoff: float = 0.1,
         include_text_hash: bool = False,
         transport: Transport | None = None,
+        allow_insecure_endpoint: bool = False,
     ) -> None:
         if max_batch <= 0:
             raise ValueError("max_batch must be greater than zero")
@@ -76,6 +81,20 @@ class Reporter:
             raise ValueError("retry_backoff must be a finite non-negative number") from exc
         if not isfinite(normalized_retry_backoff) or normalized_retry_backoff < 0:
             raise ValueError("retry_backoff must be a finite non-negative number")
+        # Cleartext endpoints ship telemetry (and the API key header) unprotected.
+        # Require https for the built-in HTTP transport unless the caller explicitly
+        # opts in (e.g. a collector on trusted loopback). Custom transports are the
+        # caller's responsibility and are not checked.
+        if (
+            endpoint
+            and transport is None
+            and not allow_insecure_endpoint
+            and not endpoint.lower().startswith("https://")
+        ):
+            raise ValueError(
+                "reporter endpoint must use https; pass allow_insecure_endpoint=True "
+                "to explicitly opt into a cleartext (e.g. trusted-loopback) collector"
+            )
         self.endpoint = endpoint
         self.api_key = api_key
         self.tenant_salt = tenant_salt
@@ -92,6 +111,7 @@ class Reporter:
         self._records_in_flight = 0
         self._dropped = 0
         self._sent = 0
+        self._overflow_warned = False
         self._transport = transport or self._http_transport
         self._sample_scale = 1_000_000
         self._sample_units = round(self.sample_rate * self._sample_scale)
@@ -129,6 +149,12 @@ class Reporter:
                 else:
                     if len(self._q) == self._q.maxlen:
                         self._dropped += 1
+                        if not self._overflow_warned:
+                            self._overflow_warned = True
+                            _log.warning(
+                                "reporter queue full; telemetry events are being dropped "
+                                "(collector slower than scan rate)"
+                            )
                     self._q.append(event)
                 self._records_in_flight -= 1
                 self._record_done.notify_all()
@@ -157,8 +183,14 @@ class Reporter:
             payload = [e.to_dict() for e in batch]
             if not self._deliver(payload):
                 # Fail-open: account for this batch and the unsent snapshot tail.
+                dropped_now = len(snapshot) - offset
                 with self._lock:
-                    self._dropped += len(snapshot) - offset
+                    self._dropped += dropped_now
+                _log.warning(
+                    "reporter delivery failed after retries; dropping batch",
+                    dropped=dropped_now,
+                    dropped_total=self._dropped,
+                )
                 break
             sent += len(payload)
             with self._lock:

@@ -4,7 +4,7 @@
 > multi-agent AI systems, with a strong emphasis on prompt-injection defense
 > (OWASP LLM01). MIT licensed. `pip install shadowshield`.
 > Site: https://shadowshield.xyz/ · Repo: https://github.com/0xsl1m/shadowshield
-> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.6.3
+> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.7.0
 
 This file is a flattened synthesis of the project's primary documentation,
 provided for LLM ingestion. Content below is derived from and includes excerpts from the
@@ -275,7 +275,7 @@ stopped:
 ```bash
 # Load the existing scan/admin keys first so the new Compose file can resolve.
 export SHADOWSHIELD_IMAGE_DIGEST="$(curl -fsSL \
-  https://github.com/0xsl1m/shadowshield/releases/download/v0.6.3/container-digest.txt)"
+  https://github.com/0xsl1m/shadowshield/releases/download/v0.7.0/container-digest.txt)"
 export SHADOWSHIELD_POLICY_KEY="<existing-0.6.0-policy-key>"
 export SHADOWSHIELD_POLICY_STATE_KEY="$(openssl rand -hex 32)"
 docker compose stop shadowshield

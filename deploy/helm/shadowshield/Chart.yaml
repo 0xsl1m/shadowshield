@@ -1,0 +1,18 @@
+apiVersion: v2
+name: shadowshield
+description: >-
+  ShadowShield control plane / proxy — unified guardrails for agentic AI
+  systems, deployed with the same hardening as the reference compose stack
+  (read-only rootfs, dropped capabilities, digest-pinned image, required
+  secrets, bounded resources).
+type: application
+version: 0.1.0
+appVersion: "0.7.0"
+keywords:
+  - llm
+  - security
+  - guardrails
+  - prompt-injection
+home: https://shadowshield.xyz
+sources:
+  - https://github.com/0xsl1m/shadowshield

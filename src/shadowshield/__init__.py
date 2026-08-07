@@ -54,6 +54,7 @@ from .core.policy import (
     make_hmac_verifier,
     sign_bundle,
 )
+from .core.stream import StreamScanner
 from .core.telemetry import TelemetryEvent, ThreatMeta, to_telemetry
 from .detectors import (
     Detector,
@@ -71,7 +72,7 @@ from .plugins import PluginManager, ShadowShieldPlugin
 from .reporter import Reporter, attach_reporter
 from .responders import Responder, spotlight
 
-__version__ = "0.6.3"
+__version__ = "0.7.0"
 
 __all__ = [
     "__version__",
@@ -93,6 +94,7 @@ __all__ = [
     "Engine",
     "ConversationHistory",
     "ShieldedSession",
+    "StreamScanner",
     # types & enums
     "Direction",
     "Decision",

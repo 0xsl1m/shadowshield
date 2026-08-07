@@ -15,6 +15,8 @@ systems. This directory is the deep-dive companion to the top-level
 - [Detectors](detectors.md) — every built-in detector and what it catches.
 - [Configuration](configuration.md) — modes, policy, weights, and YAML reference.
 - [Plugins](plugins.md) — packaging custom detectors/responders for distribution.
+- [Security audit 2026-08-05](AUDIT_REPORT_2026-08-05.md) — the comprehensive audit behind the 0.7.0 hardening work.
+- [Upgrade plan 2026-08-05](UPGRADE_PLAN_2026-08-05.md) — phased plan executed in 0.7.0 (streaming, calibration, gateway, middleware breadth).
 
 ## Mental model in one paragraph
 
