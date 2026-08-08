@@ -152,11 +152,13 @@ audit-log rotation. The externally-validated AgentDojo benchmark number shipped
 
 ## Honest remaining gaps (roadmap)
 
-- ~~**Published AgentDojo / InjecAgent numbers.**~~ ✅ **Published 2026-08-07**
-  (banking suite): ASR 52.1% defended vs 50.7% baseline at **zero utility cost** —
-  the honest delta that exposes the deterministic tiers' semantic-pretext ceiling
-  and now gates the classifier tranche (see docs/BENCHMARKS.md §5). InjecAgent
-  plus the workspace/travel/slack suites are next.
+- ~~**Published AgentDojo / InjecAgent numbers.**~~ ✅ **Published 2026-08-07/08.**
+  AgentDojo: four suites (banking/travel/slack full, workspace stratified
+  sample) — ASR unmoved within noise at zero utility cost, the honest
+  semantic-pretext ceiling. InjecAgent (1,054 cases × 3 arms): **sanitize mode
+  cuts ASR 18.8% → 8.1% at statistically identical utility** (88.2% vs 88.7%).
+  Full matrix including LLMail-Inject (96.75% catch / 0% FPR), NotInject, BIPIA,
+  and performance tiers in docs/INDUSTRY_BENCHMARKS.md.
 - ~~**Gated multilingual model number.**~~ ✅ **Published 2026-08-08.**
   `Llama-Prompt-Guard-2-22M` measured head-to-head against the non-gated
   `proventra/mdeberta-v3-base-prompt-injection`: the non-gated fine-tune wins on
