@@ -6,6 +6,28 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- AgentDojo defense adapter compatibility with agentdojo ≥ 0.1.33
+  (`PipelineElement` → `BasePipelineElement`, with fallback for older releases).
+
+### Added
+
+- `scripts/agentdojo_bench.py` — dev runner for AgentDojo suites with chunked
+  per-task execution, `--no-defense` baseline arm, and a tunable `--max-iters`
+  tool-loop cap (default 15).
+
+### Benchmarks
+
+- mDeBERTa multilingual classifier (`proventra/mdeberta-v3-base-prompt-injection`,
+  non-gated): **85.0% recall / 0% FPR** on deepset/prompt-injections (vs 48.3% /
+  0% for the default English DeBERTa); 100% recall / 41.4% FPR on the v4
+  generalization set. See docs/BENCHMARKS.md §4.
+- First AgentDojo publication (banking v1.2, `important_instructions` attack,
+  gpt-4o-mini): **ASR 52.1% defended vs 50.7% baseline; utility 62.5% vs 56.3%**
+  — zero utility cost, and the measured semantic-pretext ceiling that gates the
+  classifier tranche. See docs/BENCHMARKS.md §5.
+
 ## [0.7.0] — 2026-08-06
 
 Comprehensive audit remediation plus streaming, calibration, parallel, gateway,
