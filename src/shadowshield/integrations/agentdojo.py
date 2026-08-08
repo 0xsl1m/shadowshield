@@ -113,16 +113,14 @@ def make_agentdojo_defense(shield: Shield) -> Any:
         try:
             from agentdojo.agent_pipeline import BasePipelineElement as _Element
         except ImportError:
-            from agentdojo.agent_pipeline import (
-                PipelineElement as _Element,  # type: ignore[attr-defined,no-redef]
-            )
+            from agentdojo.agent_pipeline import PipelineElement as _Element
         from agentdojo.agent_pipeline.errors import AbortAgentError
     except ImportError as exc:  # pragma: no cover - optional heavy dependency
         raise ImportError(
             "make_agentdojo_defense requires AgentDojo: pip install agentdojo"
         ) from exc
 
-    class ShadowShieldDefense(_Element):  # type: ignore[misc,valid-type]
+    class ShadowShieldDefense(_Element):  # type: ignore[misc]
         """Aborts the agent trajectory on injection found in tool output."""
 
         def __init__(self, guard: Shield) -> None:
