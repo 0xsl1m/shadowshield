@@ -72,12 +72,11 @@ def main() -> None:
         ToolsExecutor,
     )
     from agentdojo.agent_pipeline.tool_execution import tool_result_to_str
+    from agentdojo.attacks.attack_registry import load_attack
     from agentdojo.benchmark import (
         benchmark_suite_with_injections,
         benchmark_suite_without_injections,
     )
-
-    from agentdojo.attacks.attack_registry import load_attack
     from agentdojo.logging import LOGGER_STACK, NullLogger
 
     from shadowshield import Shield
@@ -91,7 +90,7 @@ def main() -> None:
         def __init__(self, logdir: Path) -> None:
             self._logdir = str(logdir.resolve())
 
-        def __enter__(self) -> "DirLogger":
+        def __enter__(self) -> DirLogger:
             LOGGER_STACK.get().append(self)
             self.messages = []
             self.logdir = self._logdir

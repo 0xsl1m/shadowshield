@@ -113,7 +113,9 @@ def make_agentdojo_defense(shield: Shield) -> Any:
         try:
             from agentdojo.agent_pipeline import BasePipelineElement as _Element
         except ImportError:
-            from agentdojo.agent_pipeline import PipelineElement as _Element  # type: ignore[attr-defined,no-redef]
+            from agentdojo.agent_pipeline import (
+                PipelineElement as _Element,  # type: ignore[attr-defined,no-redef]
+            )
         from agentdojo.agent_pipeline.errors import AbortAgentError
     except ImportError as exc:  # pragma: no cover - optional heavy dependency
         raise ImportError(
