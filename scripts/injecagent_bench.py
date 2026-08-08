@@ -82,6 +82,15 @@ def main() -> None:
     ap.add_argument("--score", action="store_true")
     args = ap.parse_args()
 
+    # Explicit whitelist validation (argparse choices is not a CodeQL-recognized
+    # sanitizer; these values flow into file paths).
+    if args.attack is not None and args.attack not in {"dh", "ds"}:
+        ap.error("--attack must be dh or ds")
+    if args.setting not in {"base", "enhanced"}:
+        ap.error("--setting must be base or enhanced")
+    attack: str = args.attack or ""
+    setting: str = args.setting
+
     suffix = ""
     if args.defense:
         suffix = "_sanitized" if args.defense_mode == "sanitize" else "_defended"
@@ -89,7 +98,7 @@ def main() -> None:
     out_dir.mkdir(exist_ok=True)
 
     if args.score:
-        scores = score(out_dir, args.setting)
+        scores = score(out_dir, setting)
         print(json.dumps(scores, indent=2))
         return
 
@@ -138,9 +147,9 @@ def main() -> None:
 
             shield = Shield.for_mode("balanced")
 
-    data = json.loads(Path(f"data/test_cases_{args.attack}_{args.setting}.json").read_text())
+    data = json.loads(Path(f"data/test_cases_{attack}_{setting}.json").read_text())
     end = args.end if args.end is not None else len(data)
-    out_file = out_dir / f"test_cases_{args.attack}_{args.setting}.jsonl"
+    out_file = out_dir / f"test_cases_{attack}_{setting}.jsonl"
 
     done_offsets = set()
     if out_file.exists():
