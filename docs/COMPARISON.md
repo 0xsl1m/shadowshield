@@ -135,9 +135,9 @@ deterministic tiers + canary + PII + tool-call guarding + LLM/alignment judges.
 test in your CI (`SHADOWSHIELD_RUN_MODEL_TESTS=1` with `[transformers]`) — its
 *logic* is covered, but the live model has not been exercised in this repo's CI.
 
-**Still recommended before a 1.0 / PyPI release:** an externally-validated
-benchmark number (AgentDojo/PINT), a CI run on a real runner, and audit-log
-rotation. None are blockers for an internal/self-hosted deployment.
+**Still recommended before a 1.0 / PyPI release:** a CI run on a real runner and
+audit-log rotation. The externally-validated AgentDojo benchmark number shipped
+2026-08-07 (see docs/BENCHMARKS.md §5). None are blockers for an internal/self-hosted deployment.
 
 ## Shipped since the audit
 
@@ -145,16 +145,23 @@ rotation. None are blockers for an internal/self-hosted deployment.
 - ✅ **Vector-similarity self-hardening tier** (Rebuff layer 3) — `use_vectors=True`,
   `shield.harden()`. Bundled multilingual corpus; +1.7pp recall at 0% FPR.
 - ✅ **Multilingual signatures** (de/es/fr/it/pt) — +5pp recall on deepset, 0% FPR.
-- ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; ready to run.
+- ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; numbers published
+  2026-08-07 (docs/BENCHMARKS.md §5).
 - ✅ **Presidio PII backend** — `pii` detector `backend="presidio"|"both"`, fail-safe to regex.
 - ✅ **FastAPI server + dashboard** — `shadowshield serve` (`[dashboard]` extra).
 
 ## Honest remaining gaps (roadmap)
 
-- **Published AgentDojo / InjecAgent numbers.** The adapter is built and tested;
-  running the suite needs an LLM API key. The ASR-at-fixed-utility figure is the
-  next milestone. *(highest priority)*
+- ~~**Published AgentDojo / InjecAgent numbers.**~~ ✅ **Published 2026-08-07**
+  (banking suite): ASR 52.1% defended vs 50.7% baseline at **zero utility cost** —
+  the honest delta that exposes the deterministic tiers' semantic-pretext ceiling
+  and now gates the classifier tranche (see docs/BENCHMARKS.md §5). InjecAgent
+  plus the workspace/travel/slack suites are next.
 - **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
-  requires a HuggingFace license/login to benchmark.
-- **Richer attack corpus + tuned vector threshold** to push the vector tier's
-  contribution beyond the current conservative +1.7pp.
+  requires a HuggingFace license/login to benchmark. Interim published
+  2026-08-07 with the non-gated `proventra/mdeberta-v3-base-prompt-injection`:
+  85.0% recall / 0% FPR on deepset (vs 48.3% for the default English model).
+- ~~**Richer attack corpus + tuned vector threshold**~~ ✅ Corpus expanded in
+  the v4 generalization set (0.7.0). The threshold stays deliberately untuned on
+  eval data; the remaining lever is further corpus expansion, not threshold
+  fitting.

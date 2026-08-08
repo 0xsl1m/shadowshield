@@ -430,6 +430,10 @@ from shadowshield.integrations import make_agentdojo_defense
 pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores ASR + utility
 ```
 
+First AgentDojo numbers **published 2026-08-07** — banking suite: ASR 52.1% vs
+50.7% no-defense baseline at **zero utility cost**; the honest ceiling of the
+deterministic tiers on semantic-pretext attacks. See docs/BENCHMARKS.md §5.
+
 ### Async
 
 ```python

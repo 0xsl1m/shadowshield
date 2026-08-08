@@ -43,3 +43,6 @@ coverage.xml
 *.log
 shadowshield_audit.jsonl
 .shadowshield_cache/
+
+# AgentDojo benchmark run traces (local dev artifacts)
+agentdojo_runs/

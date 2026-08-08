@@ -109,14 +109,18 @@ def make_agentdojo_defense(shield: Shield) -> Any:
     attack being *prevented* (no utility loss on clean trajectories).
     """
     try:
-        from agentdojo.agent_pipeline import PipelineElement
+        # AgentDojo >= 0.1.33 renamed PipelineElement to BasePipelineElement.
+        try:
+            from agentdojo.agent_pipeline import BasePipelineElement as _Element
+        except ImportError:
+            from agentdojo.agent_pipeline import PipelineElement as _Element
         from agentdojo.agent_pipeline.errors import AbortAgentError
     except ImportError as exc:  # pragma: no cover - optional heavy dependency
         raise ImportError(
             "make_agentdojo_defense requires AgentDojo: pip install agentdojo"
         ) from exc
 
-    class ShadowShieldDefense(PipelineElement):  # type: ignore[misc]
+    class ShadowShieldDefense(_Element):  # type: ignore[misc]
         """Aborts the agent trajectory on injection found in tool output."""
 
         def __init__(self, guard: Shield) -> None:
