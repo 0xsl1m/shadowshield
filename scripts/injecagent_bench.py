@@ -82,14 +82,15 @@ def main() -> None:
     ap.add_argument("--score", action="store_true")
     args = ap.parse_args()
 
-    # Explicit whitelist validation (argparse choices is not a CodeQL-recognized
-    # sanitizer; these values flow into file paths).
-    if args.attack is not None and args.attack not in {"dh", "ds"}:
+    # Map CLI values through literal dicts so path components can only ever be
+    # one of the hard-coded strings (CodeQL-recognized sanitizer).
+    attack = {"dh": "dh", "ds": "ds"}.get(args.attack or "")
+    if args.attack is not None and attack is None:
         ap.error("--attack must be dh or ds")
-    if args.setting not in {"base", "enhanced"}:
+    setting = {"base": "base", "enhanced": "enhanced"}.get(args.setting)
+    if setting is None:
         ap.error("--setting must be base or enhanced")
-    attack: str = args.attack or ""
-    setting: str = args.setting
+    attack = attack or ""
 
     suffix = ""
     if args.defense:
