@@ -150,23 +150,29 @@ via `use_transformer="meta-llama/Llama-Prompt-Guard-2-22M"`. Note: the Prompt-Gu
 models are **gated** on HuggingFace — accept the license and run `huggingface-cli
 login` (or set `HF_TOKEN`) first. The default ProtectAI model needs no token.
 
-**Measured interim (2026-08-07):** pending the gated-model license, we benchmarked
-the non-gated multilingual classifier
-[`proventra/mdeberta-v3-base-prompt-injection`](https://huggingface.co/proventra/mdeberta-v3-base-prompt-injection)
-(same mDeBERTa backbone family) via `use_transformer="proventra/mdeberta-v3-base-prompt-injection"`:
+**Measured head-to-head (balanced mode, CPU, Wilson 95% CIs):** both multilingual
+candidates were benchmarked through ShadowShield on the same two evals —
+deepset/prompt-injections test (n=116) and the v4 generalization set (n=58):
 
-| Eval | Recall | FPR | Precision | Latency (CPU) |
-|------|--------|-----|-----------|----------------|
-| deepset/prompt-injections test (n=116, balanced) | **85.0%** [73.9%, 91.9%] | **0.0%** | 100% | p50 294 ms, p95 511 ms |
-| ShadowShield v4 generalization set (n=58, balanced) | **100%** [88.3%, 100%] | **41.4%** [25.5%, 59.3%] | 70.7% | p50 266 ms |
+| Model | deepset recall | deepset FPR | v4 recall | v4 FPR | p50 latency |
+|-------|---------------|-------------|-----------|--------|-------------|
+| `protectai/deberta-v3-base-prompt-injection-v2` (default, English) | 48.3% | 0% | — | — | — |
+| `meta-llama/Llama-Prompt-Guard-2-22M` (gated; measured 2026-08-08) | 25.0% [15.8%, 37.2%] | **0.0%** | 62.1% [44.0%, 77.3%] | 6.9% [1.9%, 21.9%] | **106 ms** |
+| `proventra/mdeberta-v3-base-prompt-injection` (measured 2026-08-07) | **85.0%** [73.9%, 91.9%] | **0.0%** | **100%** [88.3%, 100%] | 41.4% [25.5%, 59.3%] | 266 ms |
 
-vs. the default English DeBERTa on the same deepset split (48.3% / 0% FPR) — a
-**+36.7pp recall** jump at 0% FPR. On the v4 set it catches everything but
-over-flags semantic-pretext benign text, so: **deterministic tiers remain the
-zero-FPR backbone; the multilingual classifier is the high-recall layer to
-compose deliberately** (e.g. behind a "multilingual input" routing rule or as a
-canary/alignment confirmation signal), not a drop-in replacement at default
-thresholds.
+Honest reading:
+
+- **The non-gated proventra fine-tune beats Meta's gated 22M on every quality
+  metric here** (+60pp deepset recall at the same 0% FPR; confusion 15/0/56/45
+  for PG2 vs 51/0/56/9). Gating is a distribution hurdle, not a quality signal —
+  the 22M's strength is footprint and speed (~2.5× faster), not detection.
+- The proventra model's v4 profile (catches everything, over-flags
+  semantic-pretext benign text) means: **deterministic tiers remain the
+  zero-FPR backbone; the multilingual classifier is the high-recall layer to
+  compose deliberately** (e.g. behind a "multilingual input" routing rule or as
+  a canary/alignment confirmation signal), not a drop-in replacement at default
+  thresholds. PG2-22M is the pick when latency/footprint dominates and modest
+  recall is acceptable.
 
 ## 5. Interpretation & roadmap
 
@@ -215,6 +221,7 @@ Three honest takeaways:
 
 > External model numbers measured 2026-06-12; curated/blind snapshots measured
 > 2026-07-25 on CPU; mDeBERTa multilingual classifier + AgentDojo banking numbers
-> measured 2026-08-07 on CPU. Latency is hardware-dependent; the
+> measured 2026-08-07 on CPU; gated Llama-Prompt-Guard-2-22M numbers measured
+> 2026-08-08 on CPU. Latency is hardware-dependent; the
 > classifier adds tens of ms/scan on CPU, the vector tier ~20 ms, vs. sub-ms for
 > the deterministic tiers.

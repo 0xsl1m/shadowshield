@@ -19,6 +19,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Benchmarks
 
+- Gated `meta-llama/Llama-Prompt-Guard-2-22M` head-to-head (2026-08-08): 25.0%
+  recall / 0% FPR on deepset, 62.1% / 6.9% on v4, p50 106 ms — beaten on every
+  quality metric by the non-gated proventra fine-tune; its edge is footprint and
+  ~2.5× latency. This closes the last "honest remaining gap" in
+  docs/COMPARISON.md. See docs/BENCHMARKS.md §4.
 - mDeBERTa multilingual classifier (`proventra/mdeberta-v3-base-prompt-injection`,
   non-gated): **85.0% recall / 0% FPR** on deepset/prompt-injections (vs 48.3% /
   0% for the default English DeBERTa); 100% recall / 41.4% FPR on the v4

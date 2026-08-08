@@ -157,10 +157,11 @@ audit-log rotation. The externally-validated AgentDojo benchmark number shipped
   the honest delta that exposes the deterministic tiers' semantic-pretext ceiling
   and now gates the classifier tranche (see docs/BENCHMARKS.md §5). InjecAgent
   plus the workspace/travel/slack suites are next.
-- **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
-  requires a HuggingFace license/login to benchmark. Interim published
-  2026-08-07 with the non-gated `proventra/mdeberta-v3-base-prompt-injection`:
-  85.0% recall / 0% FPR on deepset (vs 48.3% for the default English model).
+- ~~**Gated multilingual model number.**~~ ✅ **Published 2026-08-08.**
+  `Llama-Prompt-Guard-2-22M` measured head-to-head against the non-gated
+  `proventra/mdeberta-v3-base-prompt-injection`: the non-gated fine-tune wins on
+  every quality metric (85.0% vs 25.0% deepset recall, both 0% FPR); PG2-22M's
+  edge is footprint and ~2.5× lower latency. Full table in docs/BENCHMARKS.md §4.
 - ~~**Richer attack corpus + tuned vector threshold**~~ ✅ Corpus expanded in
   the v4 generalization set (0.7.0). The threshold stays deliberately untuned on
   eval data; the remaining lever is further corpus expansion, not threshold
