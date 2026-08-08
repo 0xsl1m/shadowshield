@@ -214,10 +214,15 @@ Three honest takeaways:
 3. **Methodology caveats.** gpt-4o-mini ends ~40% of trajectories early with a
    clarifying question, so some "prevented" attacks were never attempted
    (ASR is reported over all 144 runs per AgentDojo convention); a single
-   suite/attack/model is a starting point, not the full matrix — workspace,
-   travel, and slack suites are next. The run also surfaced an adapter
-   compat fix for agentdojo ≥ 0.1.33 (`PipelineElement` →
+   suite/attack/model is a starting point, not the full matrix. The run also
+   surfaced an adapter compat fix for agentdojo ≥ 0.1.33 (`PipelineElement` →
    `BasePipelineElement`), which shipped with these numbers.
+
+**Remaining suites (2026-08-08):** travel, slack, and a stratified workspace
+sample replicate the banking signature — ASR unmoved within noise at zero
+utility cost everywhere. Full cross-suite table plus InjecAgent, BIPIA,
+LLMail-Inject, NotInject, and the performance suite:
+[INDUSTRY_BENCHMARKS.md](INDUSTRY_BENCHMARKS.md).
 
 > External model numbers measured 2026-06-12; curated/blind snapshots measured
 > 2026-07-25 on CPU; mDeBERTa multilingual classifier + AgentDojo banking numbers

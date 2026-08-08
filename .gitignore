@@ -46,3 +46,9 @@ shadowshield_audit.jsonl
 
 # AgentDojo benchmark run traces (local dev artifacts)
 agentdojo_runs/
+
+# Industry benchmark dev artifacts
+_bench/
+perf_results.json
+pg2_22m_results.json
+industry_bench_results.json

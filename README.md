@@ -432,7 +432,9 @@ pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores 
 
 First AgentDojo numbers **published 2026-08-07** — banking suite: ASR 52.1% vs
 50.7% no-defense baseline at **zero utility cost**; the honest ceiling of the
-deterministic tiers on semantic-pretext attacks. See docs/BENCHMARKS.md §5.
+deterministic tiers on semantic-pretext attacks. Full industry matrix
+(LLMail-Inject 96.75% catch / 0% FPR, InjecAgent three-arm study, BIPIA,
+NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
 
 ### Async
 

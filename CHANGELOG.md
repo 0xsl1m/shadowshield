@@ -19,6 +19,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Benchmarks
 
+- Industry-standard matrix (2026-08-08, docs/INDUSTRY_BENCHMARKS.md):
+  LLMail-Inject **96.75% catch / 0% FPR** (2,000 real attack submissions);
+  NotInject 0% block-FPR over-defense; BIPIA three-task dual-predicate eval;
+  AgentDojo travel/slack full suites + workspace stratified sample (ASR unmoved,
+  zero utility cost, replicating banking); **InjecAgent three-arm study —
+  sanitize mode cuts ASR 18.8% → 8.1% at statistically identical utility**
+  (88.2% vs 88.7%); four-tier performance suite (deterministic p50 0.25 ms,
+  374 scans/s, 0.2 MB RSS).
+- New dev runners: `scripts/injecagent_bench.py` (three defense arms,
+  chunked/resumable), `scripts/bipia_bench.py`, `scripts/industry_classify_bench.py`,
+  `scripts/perf_bench.py`.
 - Gated `meta-llama/Llama-Prompt-Guard-2-22M` head-to-head (2026-08-08): 25.0%
   recall / 0% FPR on deepset, 62.1% / 6.9% on v4, p50 106 ms — beaten on every
   quality metric by the non-gated proventra fine-tune; its edge is footprint and
