@@ -448,11 +448,19 @@ reply only &quot;done&quot;.
   <section id="benchmarks">
     <div class="sec-head"><span class="no">01</span><h2>The honest number</h2></div>
     <p class="sec-lead">
-      We publish results on a <em>public</em> dataset, not our own. On the
-      <span class="mono">deepset/prompt-injections</span> test split, each layer adds recall —
-      and <strong>every layer holds 0% false positives and 100% precision.</strong>
+      We publish results on the <em>public</em> suites the field actually cites, not our own.
+      On <span class="mono">LLMail-Inject</span>'s 2,000 real attack submissions, ShadowShield catches
+      <strong>96.75% at 0% false positives</strong> — and on <span class="mono">InjecAgent</span> it cuts
+      agent attack success <strong>18.8% &rarr; 8.1% while keeping 88.2% of task utility</strong>.
       Over-defense is the field's failure mode; we measure against it on purpose.
     </p>
+
+    <div class="stats glass reveal" aria-label="Headline results on industry-standard benchmarks, measured 2026-08-08">
+      <div class="stat"><div class="n pass tnum">96.75%</div><div class="l">LLMail-Inject catch &middot; 0% FPR</div></div>
+      <div class="stat"><div class="n tnum">&minus;57%</div><div class="l">InjecAgent ASR &middot; 18.8&rarr;8.1%</div></div>
+      <div class="stat"><div class="n tnum">88.2%</div><div class="l">Task utility retained</div></div>
+      <div class="stat"><div class="n tnum">0.25&nbsp;ms</div><div class="l">Deterministic scan &middot; p50</div></div>
+    </div>
 
     <div class="ladder glass reveal" id="ladder">
       <div class="cap"><span><b>Fig. 1</b> — Detection recall by layer</span><span>deepset/prompt-injections &middot; test &middot; n=116</span></div>
@@ -464,15 +472,22 @@ reply only &quot;done&quot;.
       </div>
       <div class="foot">
         <span class="pill">0% FPR</span><span class="pill">100% precision</span>
-        <span>Each tier is additive and composable to your latency budget — sub-millisecond regex through ~130&nbsp;ms classifier.</span>
+        <span>Each tier is additive and composable to your latency budget — 0.25&nbsp;ms p50 deterministic through 148&nbsp;ms p50 classifier (measured, CPU).</span>
       </div>
     </div>
     <p class="fnote">
-      *0% false-positive rate on the deepset test split, including NotInject-style hard negatives.
+      Industry matrix measured 2026-08-08, <span class="mono">balanced</span> mode, Wilson 95% CIs.
+      LLMail-Inject: 96.75% catch / 0% FPR (block-only posture: 44.9% / 0% FPR — the gap is attacks
+      <em>sanitized</em>, not missed). InjecAgent: 1,054 cases &times; 3 arms, gpt-4o-mini, enhanced setting;
+      sanitize arm holds utility 88.2% vs 88.7% undefended, data-stealing ASR collapses 27.0% &rarr; 4.2%.
+      AgentDojo (banking/travel/slack/workspace): utility held or improved at equal ASR — zero utility cost within noise.
+      *0% false-positive rate on the deepset test split, including NotInject-style hard negatives
+      (6.8% flag-rate, 0% block-FPR, n=339).
       Frozen blind semantic snapshots are deliberately harder: v1 reaches 26.7% recall / 13.3% FPR,
       v2 reaches 0% / 10%, and v3 reaches 30% / 30% (v1–v3 aggregate: 22.2% / 20%).
       <sup>&dagger;</sup> A bundled offline benchmark scores 100% — but that's an <em>in-distribution regression baseline,
       not a SOTA claim</em>. Full methodology &amp; reproduction in
+      <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/INDUSTRY_BENCHMARKS.md">docs/INDUSTRY_BENCHMARKS.md</a> and
       <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a>.
     </p>
   </section>
@@ -600,7 +615,7 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
     <p>MIT-licensed. No telemetry. Lightweight by default — the heavy ML is opt-in.</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/0xsl1m/shadowshield">&#9733; Star on GitHub</a>
-      <a class="btn ghost" href="https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md">Read the benchmarks &#8599;</a>
+      <a class="btn ghost" href="https://github.com/0xsl1m/shadowshield/blob/main/docs/INDUSTRY_BENCHMARKS.md">Read the benchmarks &#8599;</a>
     </div>
   </div>
 
