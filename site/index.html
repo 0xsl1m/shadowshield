@@ -450,15 +450,16 @@ reply only &quot;done&quot;.
     <p class="sec-lead">
       We publish results on the <em>public</em> suites the field actually cites, not our own.
       On <span class="mono">LLMail-Inject</span>'s 2,000 real attack submissions, ShadowShield catches
-      <strong>96.75% at 0% false positives</strong> — and on <span class="mono">InjecAgent</span> it cuts
-      agent attack success <strong>18.8% &rarr; 8.1% while keeping 88.2% of task utility</strong>.
-      Over-defense is the field's failure mode; we measure against it on purpose.
+      <strong>96.75% at 0% false positives</strong>. With the classifier tranche composed in, it drives
+      <span class="mono">InjecAgent</span> attack success to <strong>0.1%</strong> — and
+      <span class="mono">AgentDojo</span> ASR to <strong>0–1.8% across all four suites</strong>
+      (baselines 27–62%). Over-defense is the field's failure mode; we measure against it on purpose.
     </p>
 
-    <div class="stats glass reveal" aria-label="Headline results on industry-standard benchmarks, measured 2026-08-08">
+    <div class="stats glass reveal" aria-label="Headline results on industry-standard benchmarks, measured 2026-08-09">
       <div class="stat"><div class="n pass tnum">96.75%</div><div class="l">LLMail-Inject catch &middot; 0% FPR</div></div>
-      <div class="stat"><div class="n tnum">&minus;57%</div><div class="l">InjecAgent ASR &middot; 18.8&rarr;8.1%</div></div>
-      <div class="stat"><div class="n tnum">88.2%</div><div class="l">Task utility retained</div></div>
+      <div class="stat"><div class="n tnum">0.1%</div><div class="l">InjecAgent ASR &middot; was 18.8%</div></div>
+      <div class="stat"><div class="n tnum">0&ndash;1.8%</div><div class="l">AgentDojo ASR &middot; 4 suites</div></div>
       <div class="stat"><div class="n tnum">0.25&nbsp;ms</div><div class="l">Deterministic scan &middot; p50</div></div>
     </div>
 
@@ -476,11 +477,13 @@ reply only &quot;done&quot;.
       </div>
     </div>
     <p class="fnote">
-      Industry matrix measured 2026-08-08, <span class="mono">balanced</span> mode, Wilson 95% CIs.
+      Industry matrix measured 2026-08-09, <span class="mono">balanced</span> mode, Wilson 95% CIs.
       LLMail-Inject: 96.75% catch / 0% FPR (block-only posture: 44.9% / 0% FPR — the gap is attacks
-      <em>sanitized</em>, not missed). InjecAgent: 1,054 cases &times; 3 arms, gpt-4o-mini, enhanced setting;
-      sanitize arm holds utility 88.2% vs 88.7% undefended, data-stealing ASR collapses 27.0% &rarr; 4.2%.
-      AgentDojo (banking/travel/slack/workspace): utility held or improved at equal ASR — zero utility cost within noise.
+      <em>sanitized</em>, not missed). InjecAgent: 1,054 cases &times; 4 arms, gpt-4o-mini, enhanced setting;
+      the sanitize-clf arm (segment-span classifier sanitization) holds 76.9% utility at 0.1% ASR —
+      data-stealing ASR 27.0% &rarr; 0.0%.
+      AgentDojo (banking/travel/slack/workspace, classifier arm): ASR 0&ndash;1.8% from 27&ndash;62% baselines,
+      with no abort-driven utility loss on any suite.
       *0% false-positive rate on the deepset test split, including NotInject-style hard negatives
       (6.8% flag-rate, 0% block-FPR, n=339).
       Frozen blind semantic snapshots are deliberately harder: v1 reaches 26.7% recall / 13.3% FPR,

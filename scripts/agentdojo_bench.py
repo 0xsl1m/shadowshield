@@ -50,6 +50,13 @@ def main() -> None:
     parser.add_argument("--model", default="gpt-4o-mini-2024-07-18")
     parser.add_argument("--suite", default="banking")
     parser.add_argument("--no-defense", action="store_true", help="baseline run without the ShadowShield element")
+    parser.add_argument("--transformer-model", default=None,
+                        help="compose this HF classifier into the defense shield "
+                             "(classifier tranche); e.g. proventra/mdeberta-v3-base-prompt-injection")
+    parser.add_argument("--pipeline-name", default=None,
+                        help="override the trace-cache pipeline name (use a fresh "
+                             "name when adapter code changes, so stale traces "
+                             "from older adapter semantics are never reused)")
     parser.add_argument("--max-iters", type=int, default=15,
                         help="max tool-call loop iterations per trajectory (AgentDojo default: 15)")
     args = parser.parse_args()
@@ -104,7 +111,11 @@ def main() -> None:
     llm = OpenAILLM(client, args.model)
     loop_elements: list = [ToolsExecutor(tool_result_to_str)]
     if not args.no_defense:
-        loop_elements.append(make_agentdojo_defense(Shield.for_mode("balanced")))
+        shield = Shield.for_mode(
+            "balanced",
+            use_transformer=args.transformer_model or False,
+        )
+        loop_elements.append(make_agentdojo_defense(shield))
     loop_elements.append(llm)
     pipeline = AgentPipeline(
         [
@@ -115,7 +126,16 @@ def main() -> None:
         ]
     )
 
-    pipeline.name = f"{args.model} shadowshield-balanced" if not args.no_defense else f"{args.model} no-defense"
+    if args.pipeline_name:
+        pipeline.name = args.pipeline_name
+    elif args.no_defense:
+        pipeline.name = f"{args.model} no-defense"
+    elif args.transformer_model:
+        # Distinct name so cached runs never mix defense configurations.
+        short = args.transformer_model.rsplit("/", 1)[-1]
+        pipeline.name = f"{args.model} shadowshield-balanced+tf-{short}"
+    else:
+        pipeline.name = f"{args.model} shadowshield-balanced"
     LOGDIR.mkdir(exist_ok=True)
     with DirLogger(LOGDIR):
         if args.mode == "utility":
