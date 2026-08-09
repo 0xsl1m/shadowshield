@@ -292,10 +292,7 @@ class TransformerDetector(Detector):
         if self.segment_spans:
             segments = list(_segments(text, max_chars=_SEGMENT_MAX_CHARS))
             if segments:
-                probs = [
-                    self._attack_prob(p)
-                    for p in clf([seg for _, _, seg in segments])
-                ]
+                probs = [self._attack_prob(p) for p in clf([seg for _, _, seg in segments])]
                 for (start, end, seg), prob in zip(segments, probs, strict=True):
                     if prob >= self.segment_threshold:
                         threats.append(

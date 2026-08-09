@@ -373,13 +373,9 @@ def test_segment_mode_clean_text_emits_nothing() -> None:
 
 
 def test_segment_threshold_independent_of_whole_threshold() -> None:
-    det = _segment_detector(
-        {"label": "SAFE", "score": 0.99}, [0.1, 0.8], segment_threshold=0.9
-    )
+    det = _segment_detector({"label": "SAFE", "score": 0.99}, [0.1, 0.8], segment_threshold=0.9)
     assert det.scan(_TWO_SEGMENTS, context=_ctx(_TWO_SEGMENTS)) == []
-    det2 = _segment_detector(
-        {"label": "SAFE", "score": 0.99}, [0.1, 0.8], segment_threshold=0.7
-    )
+    det2 = _segment_detector({"label": "SAFE", "score": 0.99}, [0.1, 0.8], segment_threshold=0.7)
     threats = det2.scan(_TWO_SEGMENTS, context=_ctx(_TWO_SEGMENTS))
     assert len(threats) == 1 and threats[0].score == pytest.approx(0.8)
 
