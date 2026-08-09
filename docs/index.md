@@ -6,6 +6,7 @@ systems. This directory is the deep-dive companion to the top-level
 
 ## Contents
 
+- [Industry benchmarks](INDUSTRY_BENCHMARKS.md) — the consolidated public-suite matrix: LLMail-Inject, NotInject, BIPIA, InjecAgent, AgentDojo, multilingual head-to-head, and per-tier performance (measured 2026-08-08).
 - [Benchmarks](BENCHMARKS.md) — measured detection/FPR on the bundled set **and** the public `deepset` set (regex-only vs. classifier).
 - [Comparison](COMPARISON.md) — competitive audit + capability matrix vs. LLM Guard, LlamaFirewall, NeMo, Guardrails, Rebuff.
 - [Releasing](RELEASING.md) — PyPI Trusted Publishing plus exact scanned GHCR images and SBOMs.
