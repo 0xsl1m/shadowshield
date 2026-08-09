@@ -6,6 +6,43 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — classifier tranche (2026-08-09)
+
+- `TransformerDetector(segment_spans=True)` — sentence-level segmentation with
+  per-segment classification, emitting span-carrying threats so the sanitizer
+  redacts *just the attacking sentences* while legitimate tool data survives.
+  Whole-text classification remains as the evasion-resistant backstop
+  (span-less threat when the aggregate is hostile but no segment crosses).
+  New `segment_threshold` knob; 6 new unit tests.
+- `scripts/classifier_calib.py` — offline, zero-API-cost calibration harness:
+  InjecAgent residual coverage, benign FP at threshold grid, and AgentDojo
+  trajectory replay with per-suite checkpoints.
+
+### Fixed — AgentDojo adapter (2026-08-09)
+
+- **The adapter never saw tool-output text**: AgentDojo 0.1.35 serializes
+  content blocks as `{"type": "text", "content": ...}` but `_message_text`
+  read only the `text` key, so the defense scanned empty strings. The
+  published 2026-08-07/08 deterministic-arm AgentDojo numbers measured this
+  no-op; corrected numbers are in docs/INDUSTRY_BENCHMARKS.md §2.
+- Abort only on **block** decisions: sanitize-level findings (low-severity
+  PII in benign docs) no longer interrupt clean trajectories.
+- Content-hash scan cache: agent loops re-present full history every
+  iteration; scanning was quadratic in trajectory length (workspace traces
+  stalled), now each unique tool output is scanned once.
+- New `tests/test_agentdojo_adapter.py` (8 tests).
+
+### Benchmarks — classifier tranche results (2026-08-09)
+
+- **InjecAgent sanitize-clf arm: ASR-all 18.8% → 0.1%** (DH 0.2%, DS 0.0%) at
+  76.9% valid rate — vs sanitize 8.1% / 88.2% and redact 0% / 25.2%.
+- **AgentDojo classifier arm: ASR 0% on banking, travel, slack; 1.8% on
+  workspace** (baselines 50.7/27.1/61.9/18.8%). No utility failure involved a
+  defense abort (`error=None` on every failing trace; deltas are small-n
+  trajectory variance).
+- Deterministic arm re-measured with the fixed adapter (banking): 46.5% ASR
+  (baseline 50.7%) at 62.5% utility (baseline 56.2%).
+
 ### Fixed
 
 - AgentDojo defense adapter compatibility with agentdojo ≥ 0.1.33
@@ -16,6 +53,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `scripts/agentdojo_bench.py` — dev runner for AgentDojo suites with chunked
   per-task execution, `--no-defense` baseline arm, and a tunable `--max-iters`
   tool-loop cap (default 15).
+- Runner flags: `--transformer-model` (classifier arm), `--pipeline-name`
+  (cache isolation across adapter revisions), and InjecAgent
+  `--defense-mode sanitize-clf`.
 
 ### Benchmarks
 

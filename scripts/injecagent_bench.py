@@ -77,7 +77,8 @@ def main() -> None:
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--defense", action="store_true")
-    ap.add_argument("--defense-mode", default="redact", choices=["redact", "sanitize"])
+    ap.add_argument("--defense-mode", default="redact",
+                    choices=["redact", "sanitize", "sanitize-clf"])
     ap.add_argument("--model", default="gpt-4o-mini-2024-07-18")
     ap.add_argument("--score", action="store_true")
     args = ap.parse_args()
@@ -94,7 +95,13 @@ def main() -> None:
 
     suffix = ""
     if args.defense:
-        suffix = "_sanitized" if args.defense_mode == "sanitize" else "_defended"
+        # Map through a literal dict so the path component can only ever be one
+        # of the hard-coded strings (CodeQL-recognized sanitizer).
+        suffix = {
+            "redact": "_defended",
+            "sanitize": "_sanitized",
+            "sanitize-clf": "_sanitize_clf",
+        }[args.defense_mode]
     out_dir = INJECAGENT / f"results_ss{suffix}"
     out_dir.mkdir(exist_ok=True)
 
@@ -143,6 +150,31 @@ def main() -> None:
             # BLOCK on high aggregate scores; lift it so the policy governs.
             cfg.block_threshold = 1.01
             shield = Shield(cfg)
+        elif args.defense_mode == "sanitize-clf":
+            # Classifier tranche: the deterministic sanitize stack plus the
+            # multilingual mDeBERTa classifier in segment-span mode, so
+            # semantic-pretext instructions are span-redacted while legitimate
+            # tool data survives. If a scan flags threats but nothing could be
+            # redacted (span-less whole-text fallback), the whole observation is
+            # redacted — fail closed.
+            from shadowshield import Shield
+            from shadowshield.core.config import ShieldConfig
+            from shadowshield.core.types import Decision
+            from shadowshield.detectors.transformer import TransformerDetector
+
+            cfg = ShieldConfig.for_mode("balanced")
+            cfg.policy.high = Decision.SANITIZE
+            cfg.policy.critical = Decision.SANITIZE
+            cfg.block_threshold = 1.01
+            shield = Shield(
+                cfg,
+                extra_detectors=[
+                    TransformerDetector(
+                        "proventra/mdeberta-v3-base-prompt-injection",
+                        segment_spans=True,
+                    )
+                ],
+            )
         else:
             from shadowshield import Shield
 
@@ -178,6 +210,15 @@ def main() -> None:
                     if args.defense_mode == "sanitize":
                         # Span-redact the injection, keep the legitimate tool data.
                         item["Tool Response"] = res.safe_text
+                    elif args.defense_mode == "sanitize-clf":
+                        # Span-redact what was localized (signatures or
+                        # classifier segments); if nothing was redacted the
+                        # attack is diffuse — fail closed on the observation.
+                        item["Tool Response"] = (
+                            res.safe_text
+                            if res.safe_text != item["Tool Response"]
+                            else REDACTED
+                        )
                     else:
                         item["Tool Response"] = REDACTED
             item["defense_blocked"] = blocked

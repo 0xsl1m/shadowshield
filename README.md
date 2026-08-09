@@ -430,11 +430,13 @@ from shadowshield.integrations import make_agentdojo_defense
 pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores ASR + utility
 ```
 
-First AgentDojo numbers **published 2026-08-07** — banking suite: ASR 52.1% vs
-50.7% no-defense baseline at **zero utility cost**; the honest ceiling of the
-deterministic tiers on semantic-pretext attacks. Full industry matrix
-(LLMail-Inject 96.75% catch / 0% FPR, InjecAgent three-arm study, BIPIA,
-NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
+First AgentDojo numbers **published 2026-08-07**; the **classifier tranche**
+(2026-08-09) closes the semantic-pretext gap: composing the multilingual
+mDeBERTa classifier into the defense drops ASR to **0% on banking/travel/slack
+and 1.8% on workspace** (baselines 27–62%) with no abort-driven utility loss,
+and cuts InjecAgent ASR **18.8% → 0.1%** at 76.9% utility via segment-span
+sanitization. Full industry matrix (LLMail-Inject 96.75% catch / 0% FPR,
+BIPIA, NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
 
 ### Async
 

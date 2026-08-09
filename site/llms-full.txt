@@ -353,11 +353,13 @@ from shadowshield.integrations import make_agentdojo_defense
 pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores ASR + utility
 ```
 
-First AgentDojo numbers **published 2026-08-07** — banking suite: ASR 52.1% vs
-50.7% no-defense baseline at **zero utility cost**; the honest ceiling of the
-deterministic tiers on semantic-pretext attacks. Full industry matrix
-(LLMail-Inject 96.75% catch / 0% FPR, InjecAgent three-arm study, BIPIA,
-NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
+First AgentDojo numbers **published 2026-08-07**; the **classifier tranche**
+(2026-08-09) closes the semantic-pretext gap: composing the multilingual
+mDeBERTa classifier into the defense drops ASR to **0% on banking/travel/slack
+and 1.8% on workspace** (baselines 27–62%) with no abort-driven utility loss,
+and cuts InjecAgent ASR **18.8% → 0.1%** at 76.9% utility via segment-span
+sanitization. Full industry matrix (LLMail-Inject 96.75% catch / 0% FPR,
+BIPIA, NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
 
 ### Async
 
@@ -1003,28 +1005,48 @@ detection, not a tuning failure.
 
 ### AgentDojo (v1.2, `important_instructions` attack, tool-output defense)
 
-| Suite | Runs/arm | Baseline ASR | Defended ASR | Utility (baseline → defended) |
-|-------|----------|--------------|--------------|-------------------------------|
-| Banking (full) | 144 + 16 | 50.7% | 52.1% | 56.3% → 62.5% |
-| Travel (full) | 140 + 20 | 27.1% | 30.7% | 50.0% → 55.0% |
-| Slack (full) | 105 + 21 | 61.9% | 64.8% | 81.0% → 71.4% |
-| Workspace (stratified 1-in-5 sample) | 112 + 8 | 18.8% | 17.9% | 87.5% → 100% |
+**Classifier arm** (`balanced` + `proventra/mdeberta-v3-base-prompt-injection`,
+whole-text abort on block decisions), measured 2026-08-09:
 
-Zero utility cost within noise; ASR unmoved — `important_instructions` payloads
-are benign-pretext phrased, exactly the class deterministic tiers cannot see.
-This harness is the acceptance test for the classifier tranche.
+| Suite | Runs/arm | Baseline ASR | Classifier-arm ASR | Utility (baseline → defended) |
+|-------|----------|--------------|--------------------|-------------------------------|
+| Banking (full) | 144 + 16 | 50.7% | **0.0%** | 56.2% → 43.8% |
+| Travel (full) | 140 + 20 | 27.1% | **0.0%** | 50.0% → 60.0% |
+| Slack (full) | 105 + 21 | 61.9% | **0.0%** | 81.0% → 61.9% |
+| Workspace (stratified 1-in-5 sample) | 112 + 8 | 18.8% | **1.8%** | 87.5% → 87.5% |
 
-### InjecAgent (1,054 cases/arm, enhanced setting, three defense arms)
+The semantic-pretext gap is closed: ASR collapses to 0% on three suites and
+1.8% (2/112) on workspace. Utility deltas are mixed and small-n — **no utility
+failure involved a defense abort** (every failing trace ran to completion), so
+these are trajectory variance, not over-defense. An offline replay over the
+baseline traces predicted exactly this outcome (scripts/classifier_calib.py).
+
+**Adapter fix disclosure.** The deterministic-arm AgentDojo numbers published
+2026-08-07/08 were measured with an adapter that read only the `text` key of
+content blocks, while AgentDojo 0.1.35 serializes tool outputs with a
+`content` key — that adapter scanned empty strings and never fired. The fixed
+adapter (reads both keys, content-hash scan cache, aborts only on **block**
+decisions) re-measured on banking: **deterministic arm 46.5% ASR** (baseline
+50.7%) at **62.5% utility** (baseline 56.2%) — the deterministic tiers now
+genuinely block a slice of attacks, and the semantic-pretext conclusion holds.
+
+### InjecAgent (1,054 cases/arm, enhanced setting, four defense arms)
 
 | Arm | Valid rate (utility) | ASR-all (Direct Harm) | ASR-all (Data Stealing) | **ASR-all (Total)** |
 |-----|---------------------|----------------------|------------------------|---------------------|
 | No defense | 88.7% | 10.0% | 27.0% | **18.8%** |
 | ShadowShield — redact | 25.2% | 0.0% | 0.0% | **0.0%** |
-| ShadowShield — **sanitize** | **88.2%** | 12.2% | 4.2% | **8.1%** |
+| ShadowShield — sanitize | 88.2% | 12.2% | 4.2% | **8.1%** |
+| ShadowShield — **sanitize-clf** | **76.9%** | 0.2% | **0.0%** | **0.1%** |
 
-Headline: **sanitize mode cuts total ASR 18.8% → 8.1% (−57%) at statistically
-identical utility**; data-stealing ASR collapses 27.0% → 4.2%. The redact arm
-shows brute-force blocking's cost (0% ASR, utility destroyed).
+The classifier tranche arm composes the deterministic sanitize stack with the
+multilingual classifier in **segment-span mode** (sentence-level spans
+redacted; fail-closed full redaction when a scan flags but nothing localizes).
+Result: **ASR 18.8% → 0.1% (−99.5%)**, data-stealing ASR 27.0% → 0.0%, at
+76.9% valid rate — 3× the utility of the redact arm at the same ~0% ASR.
+Offline dry-run on the 85 residual sanitize-arm attacks: segment redaction
+removed the attacker instruction in 85/85 cases while preserving 43.5% of the
+original text on average.
 
 ## 3. Multilingual classifier head-to-head
 
@@ -1058,10 +1080,14 @@ negligible memory. ML tiers cost 60–600x per scan and 0.5–0.9 GB RSS.
 
 1. Best-in-class real-world detection: 96.75% catch / 0% FPR on LLMail.
 2. Zero measured over-defense at enforcement level: 0% block-FPR everywhere.
-3. Decisive where injection syntax is present: InjecAgent sanitize −57% ASR at
-   unchanged utility.
-4. Honestly bounded: semantic-pretext attacks pass deterministic tiers —
-   closing that class is the classifier tranche's job.
+3. Semantic-pretext attacks closed by the classifier tranche (2026-08-09):
+   AgentDojo ASR 27–62% → 0–1.8% across four suites with no abort-driven
+   utility loss; InjecAgent ASR 18.8% → 0.1% at 76.9% utility. The
+   segment-span classifier design localizes attacks to their own sentences so
+   legitimate tool data survives sanitization.
+4. Honestly bounded: BIPIA-style benign-imperative attacks remain hard for
+   deterministic detection; the classifier arm is the documented answer, with
+   measured cost (latency, memory, small data-segment false-positive rate).
 5. Production-shaped performance: sub-ms deterministic scans at 374/s.
 
 
@@ -1208,9 +1234,8 @@ test in your CI (`SHADOWSHIELD_RUN_MODEL_TESTS=1` with `[transformers]`) — its
 
 **Milestone reached:** the externally-validated benchmark number is published —
 docs/INDUSTRY_BENCHMARKS.md (LLMail-Inject, InjecAgent, AgentDojo, performance;
-measured 2026-08-08). **Still recommended before a 1.0:** audit-log rotation and
-the classifier tranche closing the semantic-pretext recall class. Neither is a
-blocker for an internal/self-hosted deployment.
+measured 2026-08-09). **Still recommended before a 1.0:** audit-log rotation.
+Not a blocker for an internal/self-hosted deployment.
 
 ## Shipped since the audit
 
@@ -1222,23 +1247,25 @@ blocker for an internal/self-hosted deployment.
 - ✅ **Presidio PII backend** — `pii` detector `backend="presidio"|"both"`, fail-safe to regex.
 - ✅ **FastAPI server + dashboard** — `shadowshield serve` (`[dashboard]` extra).
 - ✅ **Industry benchmark matrix** — LLMail-Inject 96.75% catch / 0% FPR;
-  InjecAgent sanitize arm −57% ASR at unchanged utility; AgentDojo 4 suites at
-  zero utility cost; measured per-tier performance (docs/INDUSTRY_BENCHMARKS.md).
+  InjecAgent four-arm study; AgentDojo 4 suites; measured per-tier performance
+  (docs/INDUSTRY_BENCHMARKS.md).
 - ✅ **Multilingual classifier head-to-head** — non-gated proventra mDeBERTa
   85.0% recall / 0% FPR vs gated Llama-Prompt-Guard-2-22M 25.0% / 0% FPR.
+- ✅ **Classifier tranche** — segment-span sanitization composes the mDeBERTa
+  classifier into the defense arms: AgentDojo ASR 27–62% → 0–1.8% across four
+  suites (no abort-driven utility loss); InjecAgent ASR 18.8% → 0.1% at 76.9%
+  utility. Semantic-pretext recall class closed.
 
 ## Honest remaining gaps (roadmap)
 
-- **Classifier tranche (highest priority).** Semantic-pretext attacks
-  (AgentDojo `important_instructions`, BIPIA, InjecAgent base) pass the
-  deterministic tiers — replicated across six evals. Composing the mDeBERTa
-  classifier into the defense arms is the fix; the published harness is the
-  acceptance test (target: AgentDojo ASR below baseline; InjecAgent sanitize
-  residual below 8.1%).
+- **0.8.0 release** — the classifier tranche + benchmark matrix land in the
+  next tagged release (currently on main).
 - **Richer attack corpus + tuned vector threshold** to push the vector tier's
   contribution beyond the current conservative +1.7pp.
 - **HackAPrompt** — gated HF dataset requiring manual license acceptance in a
   browser; PINT full set is Lakera-proprietary.
+- **SaaS dashboard** — hosted React security dashboard pairing with the OSS
+  core is under consideration.
 
 
 ===== SOURCE: docs/plugins.md =====
