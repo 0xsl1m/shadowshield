@@ -46,7 +46,7 @@ print(result.safe_text)            # safe fallback message
   prompts, retrieved docs, tool results) and model **output** (secret/PII leaks,
   system-prompt regurgitation). A jailbroken model is still stopped at the exit.
 - **Layered, not a single regex.** Signature matching (English **+ multilingual**:
-  de/es/fr/it/pt), normalization-aware matching (zero-width/homoglyph/bidi),
+  de/es/fr/it/pt/zh), normalization-aware matching (zero-width/homoglyph/bidi),
   encoded-payload decoding, heuristic anomaly scoring, an *optional* DeBERTa
   classifier, and an *optional* LLM self-check — combined with a noisy-or
   aggregator so one strong signal is never averaged away.
@@ -429,6 +429,14 @@ shield = ss.Shield.for_mode("strict", use_transformer=True, use_vectors=True)
 from shadowshield.integrations import make_agentdojo_defense
 pipeline.append(make_agentdojo_defense(ss.Shield.for_mode("strict")))  # scores ASR + utility
 ```
+
+First AgentDojo numbers **published 2026-08-07**; the **classifier tranche**
+(2026-08-09) closes the semantic-pretext gap: composing the multilingual
+mDeBERTa classifier into the defense drops ASR to **0% on banking/travel/slack
+and 1.8% on workspace** (baselines 27–62%) with no abort-driven utility loss,
+and cuts InjecAgent ASR **18.8% → 0.1%** at 76.9% utility via segment-span
+sanitization. Full industry matrix (LLMail-Inject 96.75% catch / 0% FPR,
+BIPIA, NotInject, performance tiers) in docs/INDUSTRY_BENCHMARKS.md.
 
 ### Async
 

@@ -27,12 +27,16 @@ See ``docs/BENCHMARKS.md`` for how we report the result.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from ..core.shield import Shield
 from ..core.types import Direction
+
+# Bound on the content-hash cache used to skip already-scanned tool outputs.
+_SEEN_MAX = 10_000
 
 
 @dataclass(slots=True)
@@ -63,8 +67,10 @@ def _message_text(message: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
+        # Content blocks vary by framework: OpenAI-style uses {"text": ...},
+        # AgentDojo serializes blocks as {"type": "text", "content": ...}.
         parts = [
-            p if isinstance(p, str) else str(p.get("text", ""))
+            p if isinstance(p, str) else str(p.get("text", p.get("content", "")))
             for p in content
             if isinstance(p, (str, dict))
         ]
@@ -77,12 +83,21 @@ def scan_messages_for_injection(
     messages: Sequence[Any],
     *,
     tool_outputs_only: bool = True,
+    _seen: set[str] | None = None,
 ) -> ShadowShieldVerdict:
     """Scan a chat-message stream; return a verdict on the worst finding.
 
     By default only *tool* messages are scanned (the indirect-injection channel);
     set ``tool_outputs_only=False`` to scan every message. Usable standalone — no
     AgentDojo required — which is what the unit tests exercise.
+
+    ``_seen`` is an optional content-hash cache: texts already scanned clean in
+    this process are skipped. Agent loops re-present the full history every
+    iteration, so without the cache scanning is quadratic in trajectory length.
+
+    A message is treated as an attack only when the scan decision is **block**
+    (fail-closed). Sanitize-level findings (e.g. low-severity PII in a benign
+    document) must not interrupt a clean trajectory.
     """
     for i, msg in enumerate(messages):
         if tool_outputs_only and _message_role(msg) not in _TOOL_ROLES:
@@ -90,14 +105,22 @@ def scan_messages_for_injection(
         text = _message_text(msg)
         if not text:
             continue
+        if _seen is not None:
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            if digest in _seen:
+                continue
         result = shield.scan(text, direction=Direction.INPUT)
-        if not result.is_safe:
+        if result.blocked:
             top = result.top_threat()
             return ShadowShieldVerdict(
                 is_attack=True,
                 detail=top.message if top else "injection detected in tool output",
                 index=i,
             )
+        if _seen is not None:
+            if len(_seen) >= _SEEN_MAX:
+                _seen.clear()
+            _seen.add(digest)
     return ShadowShieldVerdict(is_attack=False)
 
 
@@ -109,18 +132,23 @@ def make_agentdojo_defense(shield: Shield) -> Any:
     attack being *prevented* (no utility loss on clean trajectories).
     """
     try:
-        from agentdojo.agent_pipeline import PipelineElement
+        # AgentDojo >= 0.1.33 renamed PipelineElement to BasePipelineElement.
+        try:
+            from agentdojo.agent_pipeline import BasePipelineElement as _Element
+        except ImportError:
+            from agentdojo.agent_pipeline import PipelineElement as _Element
         from agentdojo.agent_pipeline.errors import AbortAgentError
     except ImportError as exc:  # pragma: no cover - optional heavy dependency
         raise ImportError(
             "make_agentdojo_defense requires AgentDojo: pip install agentdojo"
         ) from exc
 
-    class ShadowShieldDefense(PipelineElement):  # type: ignore[misc]
+    class ShadowShieldDefense(_Element):  # type: ignore[misc]
         """Aborts the agent trajectory on injection found in tool output."""
 
         def __init__(self, guard: Shield) -> None:
             self._guard = guard
+            self._seen: set[str] = set()
 
         def query(
             self,
@@ -130,7 +158,7 @@ def make_agentdojo_defense(shield: Shield) -> Any:
             messages: Sequence[Any] = (),
             extra_args: dict[str, Any] | None = None,
         ) -> tuple[str, Any, Any, Sequence[Any], dict[str, Any]]:
-            verdict = scan_messages_for_injection(self._guard, messages)
+            verdict = scan_messages_for_injection(self._guard, messages, _seen=self._seen)
             if verdict.is_attack:
                 raise AbortAgentError(
                     f"ShadowShield blocked a prompt injection in tool output: {verdict.detail}",

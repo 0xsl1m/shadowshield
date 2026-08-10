@@ -12,7 +12,10 @@ ShadowShield guards model **input** (user prompts, retrieved docs, tool results)
 - Repository: https://github.com/0xsl1m/shadowshield
 - Package: https://pypi.org/project/shadowshield/
 - Core dependencies are deliberately small (pydantic, structlog, pyyaml, httpx); ML, vectors, tokenization helpers, Presidio PII, dataset loaders, and the dashboard are optional extras.
-- External benchmark (deepset/prompt-injections, test split, n=116): regex-only 18.3% recall, +multilingual signatures 23.3%, +vector similarity 25.0%, +DeBERTa classifier 48.3% — all at 0% false-positive rate and 100% precision.
+- Industry-standard benchmarks (classifier tranche, measured 2026-08-09): LLMail-Inject 96.75% catch / 0% FPR (2,000 real attack submissions + 203 FP probes); NotInject over-defense 6.8% flag-rate / 0% block-FPR (n=339); InjecAgent 1,054 cases x 4 arms (gpt-4o-mini, enhanced) — sanitize-clf arm (segment-span classifier sanitization) cuts attack success 18.8% -> 0.1% at 76.9% utility, data-stealing ASR 27.0% -> 0.0%; AgentDojo classifier arm — ASR 0% on banking/travel/slack and 1.8% on workspace (baselines 27-62%), with no abort-driven utility loss.
+- Earlier deterministic-only arms (2026-08-08): InjecAgent sanitize 18.8% -> 8.1% ASR at 88.2% utility; AgentDojo ASR unmoved at zero utility cost (semantic-pretext ceiling, since closed by the classifier tranche).
+- External benchmark (deepset/prompt-injections, test split, n=116): regex-only 18.3% recall, +multilingual signatures 23.3%, +vector similarity 25.0%, +DeBERTa classifier 48.3% — all at 0% false-positive rate and 100% precision. The non-gated proventra mDeBERTa reaches 85.0% recall / 0% FPR (vs gated Llama-Prompt-Guard-2-22M 25.0%).
+- Performance (CPU, p50): deterministic tier 0.25 ms short-payload at 374 scans/s and 0.2 MB RSS; +vectors 29.5 ms / 867 MB; +transformer EN 148 ms / 529 MB; +transformer multilingual 148 ms / 647 MB.
 - Bundled offline benchmark is a 100%/0-FP regression baseline (smoke test), NOT a SOTA claim.
 - Frozen blind semantic snapshots remain difficult: v1 is 26.7% recall / 13.3% FPR, v2 is 0% / 10%, and v3 is 30% / 30% (v1-v3 aggregate 22.2% / 20%); their SHA-256s and isolation protocol are published.
 - Production durable policy state requires a fourth independent `SHADOWSHIELD_POLICY_STATE_KEY`; 0.6.0 volumes must run the offline `migrate-policy-state` command before startup.
@@ -20,6 +23,7 @@ ShadowShield guards model **input** (user prompts, retrieved docs, tool results)
 ## Documentation
 
 - [README](https://github.com/0xsl1m/shadowshield/blob/main/README.md): Full overview, quickstart, architecture, and integration examples.
+- [Industry benchmarks](https://github.com/0xsl1m/shadowshield/blob/main/docs/INDUSTRY_BENCHMARKS.md): The consolidated matrix — LLMail-Inject, NotInject, BIPIA, AgentDojo, InjecAgent, multilingual head-to-head, and performance.
 - [Benchmarks](https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md): Reproducible detection-rate and false-positive-rate measurements, bundled and external.
 - [Comparison](https://github.com/0xsl1m/shadowshield/blob/main/docs/COMPARISON.md): Competitive matrix vs LLM Guard, LlamaFirewall, NeMo Guardrails, Guardrails AI, and Rebuff.
 - [Security model](https://github.com/0xsl1m/shadowshield/blob/main/docs/security-model.md): Threat taxonomy, layers, and trust boundaries.
