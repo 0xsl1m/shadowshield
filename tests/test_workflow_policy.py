@@ -104,11 +104,46 @@ def test_release_builds_install_hash_locked_dependencies() -> None:
     provenance_check = 'gh attestation verify "oci://$image@$resolved_digest"'
     assert provenance_check in container_release
     assert "--predicate-type https://slsa.dev/provenance/v1" in container_release
-    assert '--source-digest "$GITHUB_SHA"' in container_release
+    assert '--source-digest "$release_sha"' in container_release
     assert container_release.index(provenance_check) < container_release.index(
         "reused=true",
         container_release.index(provenance_check),
     )
+    assert "workflow_dispatch:" in container_release
+    assert "ref: refs/tags/${{ github.event.release.tag_name || inputs.release_tag }}" in (
+        container_release
+    )
+    assert 'test "$WORKFLOW_REF" = "refs/heads/main"' in container_release
+    assert 'git branch --remotes --contains "$GITHUB_SHA"' in container_release
+    assert 'gh release view "$RELEASE_TAG"' in container_release
+    assert "isDraft,isPrerelease,publishedAt,tagName" in container_release
+    assert "'.publishedAt // empty'" in container_release
+    assert 'test "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" = "$release_sha"' in (
+        container_release
+    )
+    assert 'test "$release_sha" = "$GITHUB_SHA"' in container_release
+    assert "recovery dispatch requires both immutable release image tags" in container_release
+    assert "del(.serialNumber" not in container_release
+    assert ".serialNumber = $serial_number" in container_release
+    assert (
+        "if: github.event_name == 'release' && steps.image.outputs.reused != 'true'"
+        in container_release
+    )
+    assert '--source-digest "$RELEASE_SHA"' in container_release
+    assert '--source-digest "$SBOM_SOURCE_SHA"' in container_release
+    assert container_release.index("id: push") < container_release.index(
+        "name: Canonicalize release SBOM"
+    )
+    canonicalize_index = container_release.index("name: Canonicalize release SBOM")
+    registry_auth_index = container_release.index("name: Authenticate for OCI attestations")
+    sbom_attestation_index = container_release.index("name: Attest release image SBOM")
+    registry_logout_index = container_release.index("name: Remove OCI registry credentials")
+    assert canonicalize_index < registry_auth_index < sbom_attestation_index
+    assert sbom_attestation_index < registry_logout_index
+    assert "printf '%s' \"$GH_TOKEN\"" in container_release
+    assert "docker login ghcr.io" in container_release
+    assert "if: always()" in container_release[registry_logout_index:]
+    assert "docker logout ghcr.io" in container_release[registry_logout_index:]
     assert 'test "$tags_verified" = true' in container_release
     assert "gh release upload" in container_release
     assert "--clobber" not in container_release

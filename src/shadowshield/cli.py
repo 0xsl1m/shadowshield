@@ -15,6 +15,7 @@ import json
 import os
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 from . import __version__
 from .config import default_config_text
@@ -87,9 +88,9 @@ def _cmd_owasp(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_benchmark(args: argparse.Namespace) -> int:
+def _resolve_benchmark_examples(args: argparse.Namespace) -> tuple[list[Any], str]:
+    """Shared dataset resolution for ``benchmark`` and ``calibrate``."""
     from .eval import (
-        evaluate_shield,
         load_adversarial,
         load_builtin,
         load_csv,
@@ -99,41 +100,77 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
 
     if args.dataset:
         loader = load_csv if args.dataset.lower().endswith(".csv") else load_jsonl
-        examples = loader(args.dataset)
-    elif args.hf:
+        return loader(args.dataset), args.dataset
+    if args.hf:
         from .eval import load_huggingface
 
-        examples = load_huggingface(args.hf, split=args.split)
-    elif args.adversarial:
-        examples = load_adversarial()
-    elif args.generalization:
-        examples = load_generalization(args.generalization)
-    else:
-        examples = load_builtin()
+        return load_huggingface(args.hf, split=args.split), args.hf
+    if args.adversarial:
+        return load_adversarial(), "adversarial"
+    if args.generalization:
+        return load_generalization(args.generalization), f"generalization-{args.generalization}"
+    return load_builtin(), "builtin"
 
+
+def _benchmark_shield(args: argparse.Namespace, *, calibrated: bool) -> Any:
     benchmark_config = ShieldConfig.for_mode(Mode(args.mode))
     # Audit output is unrelated to detector quality, distorts latency, and can
     # corrupt the benchmark command's JSON stdout. Benchmark reports still
     # retain bounded runtime-integrity counters.
     benchmark_config.logging.enabled = False
-    shield = Shield(benchmark_config, use_transformer=args.transformer or False)
+    calibrator = None
+    if calibrated and args.calibration:
+        from .core.calibration import IsotonicCalibrator
+
+        calibrator = IsotonicCalibrator.load(args.calibration)
+    return Shield(
+        benchmark_config,
+        use_transformer=args.transformer or False,
+        calibrator=calibrator,
+    )
+
+
+def _cmd_benchmark(args: argparse.Namespace) -> int:
+    from .eval import evaluate_shield
+
+    examples, src = _resolve_benchmark_examples(args)
     # Model/index initialization is deliberately outside timed scans. Any
     # warmup, readiness, or per-scan detector failure makes the benchmark
     # explicitly unreliable and produces a non-zero exit status.
+    shield = _benchmark_shield(args, calibrated=True)
     report = evaluate_shield(shield, examples, warmup=True)
 
+    raw_report = None
+    if args.calibration:
+        raw_report = evaluate_shield(_benchmark_shield(args, calibrated=False), examples)
+
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
+        out = report.to_dict()
+        if raw_report is not None:
+            out = {"calibrated": out, "raw": raw_report.to_dict()}
+        print(json.dumps(out, indent=2))
     else:
-        src = (
-            args.dataset
-            or args.hf
-            or ("adversarial" if args.adversarial else None)
-            or (f"generalization-{args.generalization}" if args.generalization else "builtin")
-        )
         print(f"dataset: {src}   mode: {args.mode}")
+        if raw_report is not None:
+            print("== raw scores ==")
+            print(raw_report.format_text())
+            print("== calibrated scores ==")
         print(report.format_text())
     return 0 if report.reliable else 1
+
+
+def _cmd_calibrate(args: argparse.Namespace) -> int:
+    from .core.calibration import fit_from_examples
+
+    examples, src = _resolve_benchmark_examples(args)
+    shield = _benchmark_shield(args, calibrated=False)
+    calibrator = fit_from_examples(shield, examples, dataset=src)
+    calibrator.save(args.out)
+    print(
+        f"calibrated on {src}: n={calibrator.meta['n']} "
+        f"positives={calibrator.meta['positives']} knots={len(calibrator.xs)} -> {args.out}"
+    )
+    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -165,6 +202,25 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         mode=args.mode,
         api_keys=args.api_key,
         cors_origins=args.cors_origin,
+    )
+    return 0
+
+
+def _cmd_proxy(args: argparse.Namespace) -> int:
+    from .proxy import serve_proxy
+
+    print(
+        f"ShadowShield proxy on http://{args.host}:{args.port} -> {args.upstream}  "
+        f"(mode={args.mode})"
+    )
+    serve_proxy(
+        args.upstream,
+        host=args.host,
+        port=args.port,
+        mode=args.mode,
+        api_keys=args.api_key,
+        scan_response=not args.no_scan_response,
+        timeout_seconds=args.timeout,
     )
     return 0
 
@@ -247,7 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset_source.add_argument(
         "--generalization",
-        choices=["v1", "v2", "v3", "all"],
+        choices=["v1", "v2", "v3", "v4", "all"],
         default=None,
         help="use an independently authored blind semantic snapshot",
     )
@@ -261,7 +317,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="add the ML classifier (optionally a model id); needs 'transformers'",
     )
     bench.add_argument("--json", action="store_true", help="emit JSON")
+    bench.add_argument(
+        "--calibration",
+        default=None,
+        metavar="PATH",
+        help="apply a fitted calibration artifact (shadowshield calibrate) and "
+        "print a raw-vs-calibrated comparison",
+    )
     bench.set_defaults(func=_cmd_benchmark)
+
+    cal = sub.add_parser(
+        "calibrate",
+        help="fit an isotonic score calibrator on a labelled dataset",
+    )
+    cal_source = cal.add_mutually_exclusive_group()
+    cal_source.add_argument("--dataset", default=None, help="path to a JSONL/CSV dataset")
+    cal_source.add_argument("--hf", default=None, help="HuggingFace dataset id (needs 'datasets')")
+    cal_source.add_argument(
+        "--adversarial", action="store_true", help="use the curated adversarial regression set"
+    )
+    cal_source.add_argument(
+        "--generalization",
+        choices=["v1", "v2", "v3", "v4", "all"],
+        default=None,
+        help="use an independently authored blind semantic snapshot",
+    )
+    cal.add_argument("--split", default="test", help="HF split (default: test)")
+    cal.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
+    cal.add_argument(
+        "--transformer",
+        nargs="?",
+        const=True,
+        default=False,
+        help="add the ML classifier (optionally a model id); needs 'transformers'",
+    )
+    cal.add_argument("--out", required=True, metavar="PATH", help="calibration artifact path")
+    cal.set_defaults(func=_cmd_calibrate)
 
     migrate = sub.add_parser(
         "migrate-policy-state",
@@ -350,6 +441,41 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     serve_p.set_defaults(func=_cmd_serve)
+
+    proxy_p = sub.add_parser(
+        "proxy",
+        help="reverse-proxy guard in front of an OpenAI-compatible LLM endpoint",
+    )
+    proxy_p.add_argument(
+        "--upstream",
+        required=True,
+        metavar="URL",
+        help="base URL of the upstream API, e.g. https://api.openai.com",
+    )
+    proxy_p.add_argument("--host", default="127.0.0.1")
+    proxy_p.add_argument("--port", type=int, default=8100)
+    proxy_p.add_argument("--mode", choices=[m.value for m in Mode], default=Mode.BALANCED.value)
+    proxy_p.add_argument(
+        "--api-key",
+        action="append",
+        default=None,
+        metavar="KEY",
+        help="require this proxy access key (X-API-Key/Bearer); repeatable. "
+        "Also SHADOWSHIELD_API_KEY. Upstream credentials travel in Authorization.",
+    )
+    proxy_p.add_argument(
+        "--no-scan-response",
+        action="store_true",
+        help="scan requests only; forward completions unchecked",
+    )
+    proxy_p.add_argument(
+        "--timeout",
+        type=float,
+        default=120.0,
+        metavar="SECONDS",
+        help="upstream request timeout (default: 120)",
+    )
+    proxy_p.set_defaults(func=_cmd_proxy)
     return parser
 
 

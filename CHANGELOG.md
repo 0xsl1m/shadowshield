@@ -4,6 +4,176 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added — classifier tranche (2026-08-09)
+
+- `TransformerDetector(segment_spans=True)` — sentence-level segmentation with
+  per-segment classification, emitting span-carrying threats so the sanitizer
+  redacts *just the attacking sentences* while legitimate tool data survives.
+  Whole-text classification remains as the evasion-resistant backstop
+  (span-less threat when the aggregate is hostile but no segment crosses).
+  New `segment_threshold` knob; 6 new unit tests.
+- `scripts/classifier_calib.py` — offline, zero-API-cost calibration harness:
+  InjecAgent residual coverage, benign FP at threshold grid, and AgentDojo
+  trajectory replay with per-suite checkpoints.
+
+### Fixed — AgentDojo adapter (2026-08-09)
+
+- **The adapter never saw tool-output text**: AgentDojo 0.1.35 serializes
+  content blocks as `{"type": "text", "content": ...}` but `_message_text`
+  read only the `text` key, so the defense scanned empty strings. The
+  published 2026-08-07/08 deterministic-arm AgentDojo numbers measured this
+  no-op; corrected numbers are in docs/INDUSTRY_BENCHMARKS.md §2.
+- Abort only on **block** decisions: sanitize-level findings (low-severity
+  PII in benign docs) no longer interrupt clean trajectories.
+- Content-hash scan cache: agent loops re-present full history every
+  iteration; scanning was quadratic in trajectory length (workspace traces
+  stalled), now each unique tool output is scanned once.
+- New `tests/test_agentdojo_adapter.py` (8 tests).
+
+### Benchmarks — classifier tranche results (2026-08-09)
+
+- **InjecAgent sanitize-clf arm: ASR-all 18.8% → 0.1%** (DH 0.2%, DS 0.0%) at
+  76.9% valid rate — vs sanitize 8.1% / 88.2% and redact 0% / 25.2%.
+- **AgentDojo classifier arm: ASR 0% on banking, travel, slack; 1.8% on
+  workspace** (baselines 50.7/27.1/61.9/18.8%). No utility failure involved a
+  defense abort (`error=None` on every failing trace; deltas are small-n
+  trajectory variance).
+- Deterministic arm re-measured with the fixed adapter (banking): 46.5% ASR
+  (baseline 50.7%) at 62.5% utility (baseline 56.2%).
+
+### Fixed
+
+- AgentDojo defense adapter compatibility with agentdojo ≥ 0.1.33
+  (`PipelineElement` → `BasePipelineElement`, with fallback for older releases).
+
+### Added
+
+- `scripts/agentdojo_bench.py` — dev runner for AgentDojo suites with chunked
+  per-task execution, `--no-defense` baseline arm, and a tunable `--max-iters`
+  tool-loop cap (default 15).
+- Runner flags: `--transformer-model` (classifier arm), `--pipeline-name`
+  (cache isolation across adapter revisions), and InjecAgent
+  `--defense-mode sanitize-clf`.
+
+### Benchmarks
+
+- Industry-standard matrix (2026-08-08, docs/INDUSTRY_BENCHMARKS.md):
+  LLMail-Inject **96.75% catch / 0% FPR** (2,000 real attack submissions);
+  NotInject 0% block-FPR over-defense; BIPIA three-task dual-predicate eval;
+  AgentDojo travel/slack full suites + workspace stratified sample (ASR unmoved,
+  zero utility cost, replicating banking); **InjecAgent three-arm study —
+  sanitize mode cuts ASR 18.8% → 8.1% at statistically identical utility**
+  (88.2% vs 88.7%); four-tier performance suite (deterministic p50 0.25 ms,
+  374 scans/s, 0.2 MB RSS).
+- New dev runners: `scripts/injecagent_bench.py` (three defense arms,
+  chunked/resumable), `scripts/bipia_bench.py`, `scripts/industry_classify_bench.py`,
+  `scripts/perf_bench.py`.
+- Gated `meta-llama/Llama-Prompt-Guard-2-22M` head-to-head (2026-08-08): 25.0%
+  recall / 0% FPR on deepset, 62.1% / 6.9% on v4, p50 106 ms — beaten on every
+  quality metric by the non-gated proventra fine-tune; its edge is footprint and
+  ~2.5× latency. This closes the last "honest remaining gap" in
+  docs/COMPARISON.md. See docs/BENCHMARKS.md §4.
+- mDeBERTa multilingual classifier (`proventra/mdeberta-v3-base-prompt-injection`,
+  non-gated): **85.0% recall / 0% FPR** on deepset/prompt-injections (vs 48.3% /
+  0% for the default English DeBERTa); 100% recall / 41.4% FPR on the v4
+  generalization set. See docs/BENCHMARKS.md §4.
+- First AgentDojo publication (banking v1.2, `important_instructions` attack,
+  gpt-4o-mini): **ASR 52.1% defended vs 50.7% baseline; utility 62.5% vs 56.3%**
+  — zero utility cost, and the measured semantic-pretext ceiling that gates the
+  classifier tranche. See docs/BENCHMARKS.md §5.
+
+## [0.7.0] — 2026-08-06
+
+Comprehensive audit remediation plus streaming, calibration, parallel, gateway,
+and middleware-breadth features from the
+[2026-08-05 upgrade plan](docs/UPGRADE_PLAN_2026-08-05.md). Highlights:
+mid-flight stream cutting, a zero-code OpenAI-compatible gateway, Anthropic /
+LiteLLM / ASGI / RAG middleware, config hot-reload, and a hardened Helm chart.
+
+### Security
+- **Fail-closed policy bundles (M-1).** `apply_bundle` now rejects unsigned
+  bundles when no verifier is configured, unless the caller explicitly opts in
+  with `allow_unsigned=True`. Deployments that previously applied unsigned
+  bundles silently must opt in — a deliberate behavior change.
+- The telemetry reporter now requires an HTTPS endpoint unless
+  `allow_insecure_endpoint=True` (or a custom transport) is set, and warns via
+  structlog on queue overflow and delivery failure.
+- The sanitizer now merges overlapping/adjacent redaction spans so combined
+  categories are reported correctly (`category_a|category_b`).
+- Fixed a latent hang in the shared request-body-limit middleware: after the
+  buffered body was fully replayed it fabricated endless empty bodies, so
+  Starlette's `StreamingResponse` disconnect listener spun forever. The replay
+  channel now delegates to the real receive channel once the body is delivered.
+
+### Streaming and scoring
+- Added `StreamScanner` (`Shield.stream_scanner(...)`): incremental scanning of
+  streamed completions with bounded memory, a carry-over window so signatures
+  split across chunk boundaries still match, and early-block semantics — the
+  first BLOCK/ESCALATE is terminal and returned immediately so callers can cut
+  the stream mid-flight. See `examples/streaming_scan.py`.
+- Added isotonic score calibration: `IsotonicCalibrator` (strict, tainted-safe
+  artifact loading), `fit_isotonic` (PAV), `fit_from_examples`, an engine
+  `calibrator` hook, a `benchmark --calibration PATH` raw-vs-calibrated view,
+  and a new `shadowshield calibrate` subcommand.
+- Added opt-in parallel detector fan-out (`parallel_detectors: true`): cheap
+  detectors run on a bounded thread pool with per-detector context copies;
+  findings, ordering, truncation, and error accounting are identical to the
+  sequential path. Measured ~3x wall-clock speedup with three 20 ms detectors.
+
+### Gateway and middleware breadth
+- Added **gateway mode**: `shadowshield proxy --upstream URL` runs an
+  OpenAI-compatible reverse proxy (`shadowshield.proxy.create_proxy_app`) that
+  scans chat messages pre-flight (403 short-circuit, upstream never called),
+  scans non-streaming completions post-flight, and cuts malicious SSE streams
+  mid-flight with an OpenAI-conventional `finish_reason="content_filter"`
+  chunk. Proxy auth keys are never forwarded upstream; auth, body limits,
+  concurrency caps, and security headers reuse the shared middleware.
+- Added `ShieldedAnthropicClient` (`middleware.anthropic`) guarding
+  `messages.create` including the `system` parameter and response text blocks.
+- Added `shielded_completion` / `ShieldedLiteLLM` (`middleware.litellm`)
+  wrapping LiteLLM's functional surface (explicit callables work too — no
+  LiteLLM import required).
+- Added `ShieldASGIMiddleware` (`middleware.asgi`): pure-ASGI, framework-free
+  middleware that guards JSON chat traffic on configurable prefixes in both
+  directions (SSE passes through; use the proxy for mid-stream cuts).
+- Added RAG guardrails (`middleware.rag`): `scan_retrieved_chunks` with
+  drop/keep/raise policies and a retrieval fan-out bound, plus duck-typed
+  `ShieldedLlamaIndexRetriever` and `ShieldedHaystackRetriever` wrappers.
+  See `examples/rag_guard.py`.
+
+### Control plane and detectors
+- Split the 1,448-line `control.py` into the `control` package (`app`, `state`,
+  `policy_state`, `models`, `migrate`) with no public API change.
+- Added config hot-reload: `ShieldState.reload_from_yaml()` (floor-clamped,
+  degradation-capped, fail-closed) and an authenticated `POST /api/reload`
+  endpoint wired through `create_control_app`/`serve_control` `config_file`.
+- Added optional vector-detector attack persistence
+  (`VectorSimilarityDetector(..., persistence_path=...)`): bounded JSONL store
+  (10k attacks / 10k chars each), malformed-line tolerant, I/O-failure safe.
+
+### Evaluation and benchmarks
+- Added blind generalization snapshot `generalization_benchmark_v4.jsonl`
+  (58 examples, 29/29 split, hash-pinned, frozen balanced-mode result
+  tp/fp/tn/fn = 17/2/27/12); `load_generalization("v4"|"all")` and CLI choices
+  updated. Blind v2/v3 remain untouched.
+- Added LangChain-middleware and plugin test coverage (86% -> 89%+).
+
+### Deployment
+- Added a Helm chart (`deploy/helm/shadowshield/`) mirroring the compose
+  hardening: digest-pinned image (install fails without it), read-only root
+  filesystem, all capabilities dropped, no privilege escalation, non-root,
+  seccomp, bounded /tmp emptyDir, required external secrets, policy-state PVC,
+  resource limits, health probes.
+
+### Supply chain and CI
+- Added a strict, dynamically discovered CI matrix that resolves and audits every
+  declared optional dependency stack, including development and combined `all`
+  graphs, so new extras cannot silently bypass vulnerability scanning.
+- Documented the lockfile auditing workflow (`pip-audit --no-deps
+  --disable-pip`) in `requirements/README.md`.
+
 ## [0.6.3] — 2026-07-25
 
 Post-launch reliability, request-intake, observability, performance, and
@@ -342,6 +512,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.7.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.7.0
 [0.6.3]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.3
 [0.6.2]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.2
 [0.6.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.1

@@ -49,7 +49,7 @@ one — measured on `deepset/prompt-injections` (test split, 116 ex):
 
 Full results + reproduction in **[BENCHMARKS.md](BENCHMARKS.md)**. The takeaways:
 the deterministic tier is high-precision/low-recall, multilingual signatures
-(de/es/fr/it/pt) and the classifier each add recall at **zero false-positive
+(de/es/fr/it/pt/zh) and the classifier each add recall at **zero false-positive
 cost**, and even then we publish a humbling 48% rather than a cherry-picked figure. Per the 2026
 distribution-shift literature ("When Benchmarks Lie"), in-distribution scores
 collapse under real shift — so the bundled 100% only proves we don't regress on
@@ -135,26 +135,36 @@ deterministic tiers + canary + PII + tool-call guarding + LLM/alignment judges.
 test in your CI (`SHADOWSHIELD_RUN_MODEL_TESTS=1` with `[transformers]`) — its
 *logic* is covered, but the live model has not been exercised in this repo's CI.
 
-**Still recommended before a 1.0 / PyPI release:** an externally-validated
-benchmark number (AgentDojo/PINT), a CI run on a real runner, and audit-log
-rotation. None are blockers for an internal/self-hosted deployment.
+**Still recommended before a 1.0 / PyPI release:** a CI run on a real runner and
+audit-log rotation. The externally-validated AgentDojo benchmark number shipped
+2026-08-07 (see docs/BENCHMARKS.md §5). None are blockers for an internal/self-hosted deployment.
 
 ## Shipped since the audit
 
 - ✅ **On PyPI** — `pip install shadowshield`, auto-published via OIDC Trusted Publishing.
 - ✅ **Vector-similarity self-hardening tier** (Rebuff layer 3) — `use_vectors=True`,
   `shield.harden()`. Bundled multilingual corpus; +1.7pp recall at 0% FPR.
-- ✅ **Multilingual signatures** (de/es/fr/it/pt) — +5pp recall on deepset, 0% FPR.
-- ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; ready to run.
+- ✅ **Multilingual signatures** (de/es/fr/it/pt/zh) — +5pp recall on deepset, 0% FPR.
+- ✅ **AgentDojo defense adapter** — `make_agentdojo_defense`; numbers published
+  2026-08-07 (docs/BENCHMARKS.md §5).
 - ✅ **Presidio PII backend** — `pii` detector `backend="presidio"|"both"`, fail-safe to regex.
 - ✅ **FastAPI server + dashboard** — `shadowshield serve` (`[dashboard]` extra).
 
 ## Honest remaining gaps (roadmap)
 
-- **Published AgentDojo / InjecAgent numbers.** The adapter is built and tested;
-  running the suite needs an LLM API key. The ASR-at-fixed-utility figure is the
-  next milestone. *(highest priority)*
-- **Gated multilingual model number.** `Llama-Prompt-Guard-2-22M` is wired but
-  requires a HuggingFace license/login to benchmark.
-- **Richer attack corpus + tuned vector threshold** to push the vector tier's
-  contribution beyond the current conservative +1.7pp.
+- ~~**Published AgentDojo / InjecAgent numbers.**~~ ✅ **Published 2026-08-07/08.**
+  AgentDojo: four suites (banking/travel/slack full, workspace stratified
+  sample) — ASR unmoved within noise at zero utility cost, the honest
+  semantic-pretext ceiling. InjecAgent (1,054 cases × 3 arms): **sanitize mode
+  cuts ASR 18.8% → 8.1% at statistically identical utility** (88.2% vs 88.7%).
+  Full matrix including LLMail-Inject (96.75% catch / 0% FPR), NotInject, BIPIA,
+  and performance tiers in docs/INDUSTRY_BENCHMARKS.md.
+- ~~**Gated multilingual model number.**~~ ✅ **Published 2026-08-08.**
+  `Llama-Prompt-Guard-2-22M` measured head-to-head against the non-gated
+  `proventra/mdeberta-v3-base-prompt-injection`: the non-gated fine-tune wins on
+  every quality metric (85.0% vs 25.0% deepset recall, both 0% FPR); PG2-22M's
+  edge is footprint and ~2.5× lower latency. Full table in docs/BENCHMARKS.md §4.
+- ~~**Richer attack corpus + tuned vector threshold**~~ ✅ Corpus expanded in
+  the v4 generalization set (0.7.0). The threshold stays deliberately untuned on
+  eval data; the remaining lever is further corpus expansion, not threshold
+  fitting.

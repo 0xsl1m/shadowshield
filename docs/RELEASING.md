@@ -72,16 +72,29 @@ gh release create vX.Y.Z --target "$merge_sha" \
 
 Do not create the release while required checks are pending. Once trusted source
 provenance exists, a partial container release is recoverable by fixing the
-failed workflow and re-running it: exact matching registry content is pulled,
-rescanned, re-attested, and reused. An interruption between the first image push
-and provenance attachment intentionally needs the incomplete GHCR tags removed
+failed workflow and using its restricted recovery dispatch from protected
+`main`:
+
+```bash
+gh workflow run container-release.yml --ref main -f release_tag=vX.Y.Z
+```
+
+The recovery path accepts only an existing stable release whose tag resolves to
+an exact green commit contained in `main`. Exact matching registry content is
+pulled only after its labels and prior release-source SLSA provenance verify,
+then it is rescanned and the missing evidence is attached. The recovered SBOM
+attestation records the protected `main` workflow commit that performed the
+repair; the independently verified SLSA provenance continues to record the exact
+release-source commit. An interruption between the first image push and
+provenance attachment intentionally needs the incomplete GHCR tags removed
 before retry. Conflicting tags and existing evidence assets are never
 overwritten. The PyPI version itself cannot be replaced.
 
 Both publication workflows independently reject non-stable tags, tag/source
 version mismatches, commits outside `main`, and commits without a successful
-exact-SHA `main` CI run. There is no manual-dispatch publication path; use
-GitHub's **Re-run failed jobs** control to recover a failed release workflow.
+exact-SHA `main` CI run. Manual dispatch cannot publish an unattested image: it
+is a recovery-only path for an existing release digest with trusted
+release-source provenance.
 
 ## Verify
 
@@ -94,19 +107,26 @@ gh release download vX.Y.Z \
   --pattern container-digest.txt --pattern shadowshield-sbom.cdx.json
 digest="$(cat container-digest.txt)"
 image="ghcr.io/0xsl1m/shadowshield@$digest"
+release_sha="$(git rev-list -n 1 vX.Y.Z)"
+# For a normal release, both attestations use the release SHA. If evidence was
+# completed by the recovery dispatch, use that successful run's protected-main
+# head SHA for evidence_sha:
+evidence_sha="$release_sha"
+# evidence_sha="$(gh run view RECOVERY_RUN_ID --json headSha --jq .headSha)"
 docker pull "$image"
 gh attestation verify "oci://$image" \
   --repo 0xsl1m/shadowshield \
   --bundle-from-oci \
+  --predicate-type https://slsa.dev/provenance/v1 \
   --signer-workflow 0xsl1m/shadowshield/.github/workflows/container-release.yml \
-  --source-digest "$(git rev-list -n 1 vX.Y.Z)" \
+  --source-digest "$release_sha" \
   --deny-self-hosted-runners
 gh attestation verify "oci://$image" \
   --repo 0xsl1m/shadowshield \
   --bundle-from-oci \
   --predicate-type https://cyclonedx.org/bom \
   --signer-workflow 0xsl1m/shadowshield/.github/workflows/container-release.yml \
-  --source-digest "$(git rev-list -n 1 vX.Y.Z)" \
+  --source-digest "$evidence_sha" \
   --deny-self-hosted-runners
 ```
 

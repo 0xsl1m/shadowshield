@@ -6,6 +6,7 @@ systems. This directory is the deep-dive companion to the top-level
 
 ## Contents
 
+- [Industry benchmarks](INDUSTRY_BENCHMARKS.md) — the consolidated public-suite matrix: LLMail-Inject, NotInject, BIPIA, InjecAgent, AgentDojo, multilingual head-to-head, and per-tier performance (measured 2026-08-08).
 - [Benchmarks](BENCHMARKS.md) — measured detection/FPR on the bundled set **and** the public `deepset` set (regex-only vs. classifier).
 - [Comparison](COMPARISON.md) — competitive audit + capability matrix vs. LLM Guard, LlamaFirewall, NeMo, Guardrails, Rebuff.
 - [Releasing](RELEASING.md) — PyPI Trusted Publishing plus exact scanned GHCR images and SBOMs.
@@ -15,6 +16,8 @@ systems. This directory is the deep-dive companion to the top-level
 - [Detectors](detectors.md) — every built-in detector and what it catches.
 - [Configuration](configuration.md) — modes, policy, weights, and YAML reference.
 - [Plugins](plugins.md) — packaging custom detectors/responders for distribution.
+- [Security audit 2026-08-05](AUDIT_REPORT_2026-08-05.md) — the comprehensive audit behind the 0.7.0 hardening work.
+- [Upgrade plan 2026-08-05](UPGRADE_PLAN_2026-08-05.md) — phased plan executed in 0.7.0 (streaming, calibration, gateway, middleware breadth).
 
 ## Mental model in one paragraph
 

@@ -122,6 +122,8 @@ jobs:
     name: dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      extras: ${{ steps.optional-dependencies.outputs.extras }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,6 +139,59 @@ jobs:
             -r requirements/container.lock
           python -m pip_audit --no-deps --disable-pip \
             -r requirements/build.lock
+      - name: Discover optional dependency stacks
+        id: optional-dependencies
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          extras = sorted(project["project"]["optional-dependencies"])
+          print(f"extras={json.dumps(extras, separators=(',', ':'))}")
+          PY
+
+  optional-dependency-audit:
+    name: optional dependency audit (${{ matrix.extra }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: dependency-audit
+    strategy:
+      fail-fast: false
+      matrix:
+        extra: ${{ fromJSON(needs.dependency-audit.outputs.extras) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Audit ${{ matrix.extra }} dependency stack
+        env:
+          EXTRA: ${{ matrix.extra }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          requirements_file="$RUNNER_TEMP/shadowshield-extra.txt"
+          # Audit the extra's declared third-party stack directly. Resolving the
+          # local project ('.[extra]') makes pip-audit try to audit the local
+          # shadowshield version itself, which cannot exist on PyPI before the
+          # release this PR prepares — failing every version-bump PR.
+          python -c "import sys,tomllib;print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['optional-dependencies'][sys.argv[1]]))" \
+            "$EXTRA" > "$requirements_file"
+          python -m pip install --upgrade "pip==26.1.2" "pip-audit==2.10.1"
+          # presidio-anonymizer 2.2.364 pins cryptography<49, so the pii/all
+          # stacks cannot take the fixed 49/50 releases. Suppress exactly those
+          # three advisories there; revisit when presidio raises the cap.
+          IGNORES=()
+          if [ "$EXTRA" = "pii" ] || [ "$EXTRA" = "all" ]; then
+            IGNORES=(--ignore-vuln PYSEC-2026-3552 --ignore-vuln PYSEC-2026-3553 --ignore-vuln PYSEC-2026-3554)
+          fi
+          python -m pip_audit --strict --progress-spinner off \
+            "${IGNORES[@]}" -r "$requirements_file"
 
   workflow-lint:
     name: workflow lint

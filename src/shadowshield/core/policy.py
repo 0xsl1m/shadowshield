@@ -8,7 +8,8 @@ Threat model addressed: a compromised control plane or signing key pushes a bund
 that disables detection or makes the shield maximally lenient across a fleet on the
 next poll. We make that *structurally impossible* on the shield:
 
-1. **Signature verification** - an unsigned/badly-signed bundle is rejected.
+1. **Signature verification** - an unsigned/badly-signed bundle is rejected. Skipping
+   verification requires an explicit ``allow_unsigned=True`` opt-in at the call site.
 2. **Field allow-list** - a bundle may only touch ``block_threshold``, ``detectors``,
    and ``disabled_detectors``. It may NOT rewrite the policy decision mapping, the mode,
    ``raise_on_block``, ``max_input_chars``, or logging - those are not pushable.
@@ -234,6 +235,7 @@ def apply_bundle(
     *,
     floor: ProtectionFloor | None = None,
     verifier: Verifier | None = None,
+    allow_unsigned: bool = False,
     universe: set[str] | None = None,
     baseline: ShieldConfig | None = None,
 ) -> ShieldConfig:
@@ -243,11 +245,22 @@ def apply_bundle(
     the floor -> reject if the clamped result still degrades protection beyond
     ``max_degradation_delta``. Raises :class:`PolicyRejected` on any failure; the caller
     keeps its current config.
+
+    Verification is fail-closed: when no ``verifier`` is supplied the bundle is rejected
+    unless the caller explicitly opts in with ``allow_unsigned=True`` (intended for
+    loopback-only embeddings that authenticate out-of-band). Skipping signature checks
+    is therefore always a deliberate, greppable decision.
     """
     floor = floor or ProtectionFloor()
     baseline = baseline or local
 
-    if verifier is not None and not verifier(bundle):
+    if verifier is None:
+        if not allow_unsigned:
+            raise PolicyRejected(
+                "no signature verifier supplied; pass a verifier or explicitly "
+                "opt into unsigned bundles with allow_unsigned=True"
+            )
+    elif not verifier(bundle):
         raise PolicyRejected("signature verification failed")
 
     try:

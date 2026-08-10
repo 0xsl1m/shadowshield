@@ -322,3 +322,26 @@ def test_record_racing_close_cannot_enqueue_after_close(monkeypatch) -> None:
 
     assert rep.closed is True
     assert rep.stats == {"queued": 0, "sent": 1, "dropped": 0}
+
+
+def test_reporter_requires_https_endpoint_by_default() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="https"):
+        Reporter("http://collector.example/ingest", api_key="k")
+
+
+def test_reporter_allows_https_endpoint() -> None:
+    rep = Reporter("https://collector.example/ingest", api_key="k")
+    assert rep.endpoint == "https://collector.example/ingest"
+
+
+def test_reporter_cleartext_endpoint_requires_explicit_opt_in() -> None:
+    rep = Reporter("http://127.0.0.1:9000/ingest", allow_insecure_endpoint=True)
+    assert rep.endpoint == "http://127.0.0.1:9000/ingest"
+
+
+def test_reporter_custom_transport_is_not_scheme_checked() -> None:
+    sent: list[dict] = []
+    rep = Reporter("http://in-memory", transport=lambda batch: sent.extend(batch))
+    assert rep.endpoint == "http://in-memory"

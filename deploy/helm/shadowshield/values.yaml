@@ -1,0 +1,61 @@
+# ShadowShield Helm values — mirrors compose.yaml hardening by default.
+
+image:
+  repository: ghcr.io/0xsl1m/shadowshield
+  # REQUIRED: pin the release digest (tags are mutable; digests are not).
+  # helm install fails until this is set:
+  #   --set image.digest=sha256:<release-digest>
+  digest: ""
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+# Container command. The default runs the control dashboard; switch to the
+# gateway with: ["shadowshield", "proxy", "--upstream", "https://api.openai.com", "--host", "0.0.0.0", "--port", "8000"]
+command:
+  - shadowshield
+  - serve
+  - --control
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Secrets: reference an existing Secret (recommended; create it out-of-band
+# with kubectl or an external-secrets operator) or have the chart create one
+# from stringData. Required keys:
+#   SHADOWSHIELD_API_KEY         — API access keys (comma-separated)
+#   SHADOWSHIELD_ADMIN_KEY       — control/metrics administrator keys
+#   SHADOWSHIELD_POLICY_KEY      — HMAC key for pushed policy bundles
+#   SHADOWSHIELD_POLICY_STATE_KEY — independent >=32-byte HMAC key for durable policy state
+secrets:
+  existingSecret: ""
+  create: false
+  stringData: {}
+
+config:
+  # Comma-separated allowed browser origins; empty disables CORS.
+  corsOrigins: ""
+
+persistence:
+  policyState:
+    enabled: true
+    size: 64Mi
+    storageClass: ""
+
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+    cpu: "1"
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

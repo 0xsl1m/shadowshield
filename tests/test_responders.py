@@ -153,3 +153,43 @@ def test_identity_rotation_cannot_evict_live_rate_limit_history() -> None:
 
     assert suspicious("victim").metadata["rate_limited"] is True
     assert len(limiter._events) == 2
+
+
+def test_sanitizer_merges_overlapping_spans() -> None:
+    from shadowshield.core.types import ScanResult, Severity, Threat, ThreatCategory
+
+    result = ScanResult(text="abcdef ghijkl", direction=Direction.INPUT)
+    result.threats = [
+        Threat(
+            category=ThreatCategory.PROMPT_INJECTION,
+            severity=Severity.HIGH,
+            score=0.9,
+            detector="a",
+            message="m",
+            span=(0, 6),
+        ),
+        Threat(
+            category=ThreatCategory.JAILBREAK,
+            severity=Severity.HIGH,
+            score=0.8,
+            detector="b",
+            message="m",
+            span=(3, 10),
+        ),
+        Threat(
+            category=ThreatCategory.DATA_EXFILTRATION,
+            severity=Severity.MEDIUM,
+            score=0.6,
+            detector="c",
+            message="m",
+            span=(11, 13),
+        ),
+    ]
+    from shadowshield.responders.sanitizer import SanitizeResponder
+
+    responder = SanitizeResponder()
+    out = responder.apply(result, context=None)  # type: ignore[arg-type]
+    assert (
+        out.sanitized_text == "[redacted:prompt_injection|jailbreak]j[redacted:data_exfiltration]"
+    )
+    assert out.metadata["redactions"] == 2
