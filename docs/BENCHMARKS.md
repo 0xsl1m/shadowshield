@@ -131,7 +131,7 @@ whole point (over-defense is the field's failure mode).
 (train split, deterministic tiers: 26.1% recall / 0.6% FPR / 96.4% precision.)
 
 **How to read it:**
-- The **deterministic tiers** (regex + multilingual signatures, de/es/fr/it/pt) are
+- The **deterministic tiers** (regex + multilingual signatures, de/es/fr/it/pt/zh) are
   high-precision/low-recall, cheap (sub-ms), explainable, and obfuscation-aware.
   Multilingual signatures alone added +5pp on this German-heavy set — a capability
   most OSS guards lack entirely at the signature tier.

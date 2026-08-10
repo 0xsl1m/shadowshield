@@ -46,7 +46,7 @@ print(result.safe_text)            # safe fallback message
   prompts, retrieved docs, tool results) and model **output** (secret/PII leaks,
   system-prompt regurgitation). A jailbroken model is still stopped at the exit.
 - **Layered, not a single regex.** Signature matching (English **+ multilingual**:
-  de/es/fr/it/pt), normalization-aware matching (zero-width/homoglyph/bidi),
+  de/es/fr/it/pt/zh), normalization-aware matching (zero-width/homoglyph/bidi),
   encoded-payload decoding, heuristic anomaly scoring, an *optional* DeBERTa
   classifier, and an *optional* LLM self-check — combined with a noisy-or
   aggregator so one strong signal is never averaged away.
