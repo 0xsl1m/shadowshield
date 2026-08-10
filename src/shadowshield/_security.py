@@ -28,9 +28,13 @@ import hmac
 import json
 import os
 from collections.abc import Sequence
+from math import isfinite
+from time import monotonic
 from typing import Any
 
 MAX_HTTP_BODY_BYTES = 1_048_576
+MAX_HTTP_BODY_FRAMES = 8_192
+HTTP_BODY_READ_TIMEOUT_SECONDS = 15.0
 MAX_CONCURRENT_SCANS = 16
 
 
@@ -138,16 +142,39 @@ def is_loopback(host: str) -> bool:
 
 
 class RequestBodyLimitMiddleware:
-    """Buffer and reject oversized HTTP bodies before framework JSON parsing.
+    """Coalesce and reject unsafe HTTP bodies before framework JSON parsing.
 
-    These endpoints accept bounded JSON rather than streaming uploads. Buffering
-    at most ``max_bytes`` gives deterministic 413 behavior even for chunked
-    requests without a ``Content-Length`` header.
+    These endpoints accept bounded JSON rather than streaming uploads. The
+    aggregate buffer never exceeds ``max_bytes``, so many tiny ASGI frames cannot
+    amplify a legal body into unbounded Python object overhead. A frame ceiling
+    bounds receive-loop work, and one total deadline covers the complete body
+    rather than resetting for every chunk.
     """
 
-    def __init__(self, app: Any, max_bytes: int = MAX_HTTP_BODY_BYTES) -> None:
+    def __init__(
+        self,
+        app: Any,
+        max_bytes: int = MAX_HTTP_BODY_BYTES,
+        *,
+        max_frames: int = MAX_HTTP_BODY_FRAMES,
+        read_timeout_seconds: float = HTTP_BODY_READ_TIMEOUT_SECONDS,
+    ) -> None:
+        if isinstance(max_frames, bool) or not isinstance(max_frames, int) or max_frames <= 0:
+            raise ValueError("max_frames must be a positive integer")
+        if isinstance(read_timeout_seconds, bool) or not isinstance(
+            read_timeout_seconds, (int, float)
+        ):
+            raise ValueError("read_timeout_seconds must be a finite positive number")
+        try:
+            normalized_timeout = float(read_timeout_seconds)
+        except OverflowError:
+            raise ValueError("read_timeout_seconds must be a finite positive number") from None
+        if not isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError("read_timeout_seconds must be a finite positive number")
         self.app = app
         self.max_bytes = max_bytes
+        self.max_frames = max_frames
+        self.read_timeout_seconds = normalized_timeout
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -165,29 +192,59 @@ class RequestBodyLimitMiddleware:
                 await self._reject(send)
                 return
 
-        buffered: list[dict[str, Any]] = []
-        received = 0
+        body = bytearray()
+        frame_count = 0
+        body_complete = False
+        terminal_message: dict[str, Any] | None = None
+        deadline = monotonic() + self.read_timeout_seconds
         while True:
-            message = dict(await receive())
-            buffered.append(message)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                await self._reject_timeout(send)
+                return
+            try:
+                message = dict(await asyncio.wait_for(receive(), timeout=remaining))
+            except asyncio.TimeoutError:
+                await self._reject_timeout(send)
+                return
             if message.get("type") != "http.request":
+                terminal_message = message
                 break
-            received += len(message.get("body", b""))
-            if received > self.max_bytes:
+
+            frame_count += 1
+            if frame_count > self.max_frames:
+                await self._reject_fragmented(send)
+                return
+            chunk = message.get("body", b"")
+            if len(body) + len(chunk) > self.max_bytes:
                 await self._reject(send)
                 return
+            body.extend(chunk)
             if not message.get("more_body", False):
+                body_complete = True
                 break
 
-        index = 0
+        aggregate_pending = bool(body) or body_complete
+        aggregate = bytes(body)
 
         async def replay_receive() -> dict[str, Any]:
-            nonlocal index
-            if index < len(buffered):
-                message = buffered[index]
-                index += 1
+            nonlocal aggregate_pending, terminal_message
+            if aggregate_pending:
+                aggregate_pending = False
+                return {
+                    "type": "http.request",
+                    "body": aggregate,
+                    "more_body": not body_complete,
+                }
+            if terminal_message is not None:
+                message = terminal_message
+                terminal_message = None
                 return message
-            return {"type": "http.request", "body": b"", "more_body": False}
+            # The body has been fully delivered. Delegate to the real channel so
+            # disconnect listeners (e.g. Starlette's StreamingResponse) observe
+            # http.disconnect instead of spinning on fabricated empty bodies.
+            message = await receive()
+            return dict(message) if isinstance(message, dict) else {"type": "http.disconnect"}
 
         await self.app(scope, replay_receive, send)
 
@@ -198,6 +255,36 @@ class RequestBodyLimitMiddleware:
             {
                 "type": "http.response.start",
                 "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _reject_fragmented(send: Any) -> None:
+        body = b'{"detail":"request body too fragmented"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    @staticmethod
+    async def _reject_timeout(send: Any) -> None:
+        body = b'{"detail":"request body read timed out"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 408,
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"content-length", str(len(body)).encode("ascii")),
@@ -257,7 +344,13 @@ class ConcurrencyLimitMiddleware:
 
 
 class EarlyAuthMiddleware:
-    """Authenticate protected routes before reading or parsing their bodies."""
+    """Authenticate protected routes before reading or parsing their bodies.
+
+    Configured CORS middleware sits outside this boundary and handles valid
+    browser preflights. Arbitrary ``OPTIONS`` requests that reach this layer are
+    authenticated like every other protected request, so they cannot consume
+    body-read or scan-admission capacity anonymously.
+    """
 
     def __init__(
         self,
@@ -279,10 +372,8 @@ class EarlyAuthMiddleware:
         protected = path in self.protected_paths or any(
             path.startswith(prefix) for prefix in self.protected_prefixes
         )
-        method = str(scope.get("method", "GET")).upper()
         if (
             scope.get("type") == "http"
-            and method != "OPTIONS"
             and protected
             and self.deny_when_unconfigured
             and not self.api_keys
@@ -300,7 +391,7 @@ class EarlyAuthMiddleware:
             )
             await send({"type": "http.response.body", "body": body})
             return
-        if scope.get("type") == "http" and method != "OPTIONS" and protected and self.api_keys:
+        if scope.get("type") == "http" and protected and self.api_keys:
             headers = {
                 key.decode("latin-1").lower(): value.decode("latin-1")
                 for key, value in scope.get("headers", [])

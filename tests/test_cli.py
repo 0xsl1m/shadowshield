@@ -63,6 +63,64 @@ def test_benchmark_dataset_selectors_are_mutually_exclusive(selectors) -> None:
     assert exc.value.code == 2
 
 
+def test_benchmark_warms_and_exits_nonzero_when_runtime_is_unreliable(
+    monkeypatch, tmp_path
+) -> None:
+    from shadowshield.eval import BenchmarkReport
+
+    captured: dict[str, object] = {}
+
+    def fake_evaluate(shield, examples, **kwargs):
+        captured["shield"] = shield
+        captured["examples"] = examples
+        captured.update(kwargs)
+        return BenchmarkReport(
+            n=1,
+            tp=0,
+            fp=0,
+            tn=1,
+            fn=0,
+            warmup_attempted=True,
+            ready=False,
+            not_ready=["semantic"],
+        )
+
+    dataset = tmp_path / "benchmark.jsonl"
+    dataset.write_text(
+        '{"text":"ordinary request","label":0,"category":"benign"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("shadowshield.eval.evaluate_shield", fake_evaluate)
+
+    rc, out = _run(["benchmark", "--dataset", str(dataset), "--json"])
+
+    assert rc == 1
+    assert captured["warmup"] is True
+    runtime = json.loads(out)["runtime"]
+    assert runtime["reliable"] is False
+    assert runtime["readiness"] == {
+        "ready": False,
+        "not_ready": ["semantic"],
+        "error": None,
+    }
+
+
+def test_benchmark_json_is_one_machine_readable_document(tmp_path) -> None:
+    dataset = tmp_path / "benchmark.jsonl"
+    dataset.write_text(
+        '{"text":"ordinary request","label":0,"category":"benign"}\n',
+        encoding="utf-8",
+    )
+
+    rc, out = _run(["benchmark", "--dataset", str(dataset), "--json"])
+
+    assert rc == 0
+    report = json.loads(out)
+    assert report["n"] == 1
+    assert report["runtime"]["reliable"] is True
+    assert report["runtime"]["warmup"] == {"attempted": True, "error": None}
+
+
 def test_serve_control_forwards_independent_policy_state_key(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

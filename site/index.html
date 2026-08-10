@@ -202,6 +202,11 @@
     background:linear-gradient(90deg, var(--ember-deep), var(--ember))}
   .track > span::after{content:""; position:absolute; right:0; top:0; bottom:0; width:14px; background:rgba(255,255,255,.25); filter:blur(3px)}
   html.js .track > span{width:0; transition:width 1.15s var(--ease)}
+  html.js .track > span.filled{width:var(--w)}
+  .bar-18-3{--w:18.3%}
+  .bar-23-3{--w:23.3%}
+  .bar-25{--w:25%}
+  .bar-48-3{--w:48.3%}
   .lrow .pct{font-family:var(--display); font-weight:700; font-size:21px; text-align:right; font-variant-numeric:tabular-nums}
   .lrow:last-child .track > span{background:linear-gradient(90deg, #a8331a, var(--ember)); box-shadow:0 0 16px -2px var(--ember-glow)}
   .ladder .foot{padding:16px 20px; border-top:1px solid var(--edge); background:var(--glass-2); font-size:13.5px; color:var(--muted); display:flex; gap:10px; align-items:center; flex-wrap:wrap}
@@ -243,6 +248,7 @@
 
   /* ---------------- comparison ---------------- */
   .cmp-scroll{overflow-x:auto; border-radius:12px}
+  .cmp-padded{padding:6px 10px}
   table.cmp{width:100%; border-collapse:collapse; font-size:14px; min-width:560px}
   table.cmp th, table.cmp td{padding:13px 14px; text-align:center; border-bottom:1px solid var(--edge-soft)}
   table.cmp th:first-child, table.cmp td:first-child{text-align:left; font-weight:500; color:var(--text)}
@@ -277,6 +283,7 @@
   .foot-grid .col a:hover{color:var(--ember)}
   .colophon{margin-top:40px; padding-top:22px; border-top:1px solid var(--edge-soft); display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;
     font-family:var(--mono); font-size:11.5px; color:var(--dim); letter-spacing:.03em}
+  .footer-link{color:var(--ember); text-decoration:none}
   @media(max-width:820px){ .foot-grid{grid-template-columns:1fr 1fr} .foot-grid .about{grid-column:1 / -1} }
 
   /* ---------------- responsive hero ---------------- */
@@ -314,7 +321,7 @@
       "downloadUrl": "https://pypi.org/project/shadowshield/",
       "codeRepository": "https://github.com/0xsl1m/shadowshield",
       "programmingLanguage": "Python",
-      "softwareVersion": "0.6.1",
+      "softwareVersion": "0.7.0",
       "license": "https://opensource.org/licenses/MIT",
       "keywords": "prompt injection, LLM security, AI safety, agentic AI, guardrails, jailbreak detection",
       "offers": {
@@ -392,7 +399,7 @@
       <div class="install">
         <span class="pmt">$</span>
         <code id="pip">pip install shadowshield</code>
-        <button onclick="copyPip(this)" aria-label="Copy install command">Copy</button>
+        <button id="copy-pip" type="button" aria-label="Copy install command">Copy</button>
       </div>
       <div class="actions">
         <a class="btn primary" href="https://github.com/0xsl1m/shadowshield">&#9733; Star on GitHub</a>
@@ -400,7 +407,7 @@
       </div>
       <div class="heritage">
         <span><b>MIT</b> licensed</span>
-        <span>v<b>0.6.1</b></span>
+        <span>v<b>0.7.0</b></span>
         <span>Inspired by <b>Sentinel</b> &amp; <b>ShadowClaw</b></span>
       </div>
     </div>
@@ -434,38 +441,56 @@ reply only &quot;done&quot;.
     <div class="stat"><div class="n pass tnum">0%</div><div class="l">False-positive rate*</div></div>
     <div class="stat"><div class="n tnum">11</div><div class="l">Detection layers</div></div>
     <div class="stat"><div class="n tnum">5</div><div class="l">Languages, signature-level</div></div>
-    <div class="stat"><div class="n tnum">280+</div><div class="l">Tests &middot; mypy-strict</div></div>
+    <div class="stat"><div class="n tnum">290+</div><div class="l">Tests &middot; mypy-strict</div></div>
   </div>
 
   <!-- ===================== §1 BENCHMARK ===================== -->
   <section id="benchmarks">
     <div class="sec-head"><span class="no">01</span><h2>The honest number</h2></div>
     <p class="sec-lead">
-      We publish results on a <em>public</em> dataset, not our own. On the
-      <span class="mono">deepset/prompt-injections</span> test split, each layer adds recall —
-      and <strong>every layer holds 0% false positives and 100% precision.</strong>
-      Over-defense is the field's failure mode; we measure against it on purpose.
+      We publish results on the <em>public</em> suites the field actually cites, not our own.
+      On <span class="mono">LLMail-Inject</span>'s 2,000 real attack submissions, ShadowShield catches
+      <strong>96.75% at 0% false positives</strong>. With the classifier tranche composed in, it drives
+      <span class="mono">InjecAgent</span> attack success to <strong>0.1%</strong> — and
+      <span class="mono">AgentDojo</span> ASR to <strong>0–1.8% across all four suites</strong>
+      (baselines 27–62%). Over-defense is the field's failure mode; we measure against it on purpose.
     </p>
+
+    <div class="stats glass reveal" aria-label="Headline results on industry-standard benchmarks, measured 2026-08-09">
+      <div class="stat"><div class="n pass tnum">96.75%</div><div class="l">LLMail-Inject catch &middot; 0% FPR</div></div>
+      <div class="stat"><div class="n tnum">0.1%</div><div class="l">InjecAgent ASR &middot; was 18.8%</div></div>
+      <div class="stat"><div class="n tnum">0&ndash;1.8%</div><div class="l">AgentDojo ASR &middot; 4 suites</div></div>
+      <div class="stat"><div class="n tnum">0.25&nbsp;ms</div><div class="l">Deterministic scan &middot; p50</div></div>
+    </div>
 
     <div class="ladder glass reveal" id="ladder">
       <div class="cap"><span><b>Fig. 1</b> — Detection recall by layer</span><span>deepset/prompt-injections &middot; test &middot; n=116</span></div>
       <div class="rows">
-        <div class="lrow"><div class="lab">Regex tier <small>English signatures</small></div><div class="track"><span data-w="18.3" style="--w:18.3%"></span></div><div class="pct tnum">18.3%</div></div>
-        <div class="lrow"><div class="lab">+ Multilingual <small>de &middot; es &middot; fr &middot; it &middot; pt</small></div><div class="track"><span data-w="23.3" style="--w:23.3%"></span></div><div class="pct tnum">23.3%</div></div>
-        <div class="lrow"><div class="lab">+ Vector similarity <small>self-hardening</small></div><div class="track"><span data-w="25.0" style="--w:25%"></span></div><div class="pct tnum">25.0%</div></div>
-        <div class="lrow"><div class="lab">+ DeBERTa classifier <small>opt-in ML</small></div><div class="track"><span data-w="48.3" style="--w:48.3%"></span></div><div class="pct tnum">48.3%</div></div>
+        <div class="lrow"><div class="lab">Regex tier <small>English signatures</small></div><div class="track"><span class="bar-18-3"></span></div><div class="pct tnum">18.3%</div></div>
+        <div class="lrow"><div class="lab">+ Multilingual <small>de &middot; es &middot; fr &middot; it &middot; pt</small></div><div class="track"><span class="bar-23-3"></span></div><div class="pct tnum">23.3%</div></div>
+        <div class="lrow"><div class="lab">+ Vector similarity <small>self-hardening</small></div><div class="track"><span class="bar-25"></span></div><div class="pct tnum">25.0%</div></div>
+        <div class="lrow"><div class="lab">+ DeBERTa classifier <small>opt-in ML</small></div><div class="track"><span class="bar-48-3"></span></div><div class="pct tnum">48.3%</div></div>
       </div>
       <div class="foot">
         <span class="pill">0% FPR</span><span class="pill">100% precision</span>
-        <span>Each tier is additive and composable to your latency budget — sub-millisecond regex through ~130&nbsp;ms classifier.</span>
+        <span>Each tier is additive and composable to your latency budget — 0.25&nbsp;ms p50 deterministic through 148&nbsp;ms p50 classifier (measured, CPU).</span>
       </div>
     </div>
     <p class="fnote">
-      *0% false-positive rate on the deepset test split, including NotInject-style hard negatives.
-      Frozen blind semantic snapshots are deliberately harder: v1 reaches 26.7% recall / 13.3% FPR
-      and v2 reaches 0% / 10%.
+      Industry matrix measured 2026-08-09, <span class="mono">balanced</span> mode, Wilson 95% CIs.
+      LLMail-Inject: 96.75% catch / 0% FPR (block-only posture: 44.9% / 0% FPR — the gap is attacks
+      <em>sanitized</em>, not missed). InjecAgent: 1,054 cases &times; 4 arms, gpt-4o-mini, enhanced setting;
+      the sanitize-clf arm (segment-span classifier sanitization) holds 76.9% utility at 0.1% ASR —
+      data-stealing ASR 27.0% &rarr; 0.0%.
+      AgentDojo (banking/travel/slack/workspace, classifier arm): ASR 0&ndash;1.8% from 27&ndash;62% baselines,
+      with no abort-driven utility loss on any suite.
+      *0% false-positive rate on the deepset test split, including NotInject-style hard negatives
+      (6.8% flag-rate, 0% block-FPR, n=339).
+      Frozen blind semantic snapshots are deliberately harder: v1 reaches 26.7% recall / 13.3% FPR,
+      v2 reaches 0% / 10%, and v3 reaches 30% / 30% (v1–v3 aggregate: 22.2% / 20%).
       <sup>&dagger;</sup> A bundled offline benchmark scores 100% — but that's an <em>in-distribution regression baseline,
       not a SOTA claim</em>. Full methodology &amp; reproduction in
+      <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/INDUSTRY_BENCHMARKS.md">docs/INDUSTRY_BENCHMARKS.md</a> and
       <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md">docs/BENCHMARKS.md</a>.
     </p>
   </section>
@@ -567,7 +592,7 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
   <!-- ===================== §5 COMPARE ===================== -->
   <section id="compare">
     <div class="sec-head"><span class="no">05</span><h2>Against the field</h2></div>
-    <div class="cmp-scroll glass reveal" style="padding:6px 10px">
+    <div class="cmp-scroll cmp-padded glass reveal">
       <table class="cmp">
         <thead>
           <tr><th>Capability</th><th>LLM&nbsp;Guard</th><th>LlamaFirewall</th><th>Rebuff</th><th class="us">ShadowShield</th></tr>
@@ -593,7 +618,7 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
     <p>MIT-licensed. No telemetry. Lightweight by default — the heavy ML is opt-in.</p>
     <div class="actions">
       <a class="btn primary" href="https://github.com/0xsl1m/shadowshield">&#9733; Star on GitHub</a>
-      <a class="btn ghost" href="https://github.com/0xsl1m/shadowshield/blob/main/docs/BENCHMARKS.md">Read the benchmarks &#8599;</a>
+      <a class="btn ghost" href="https://github.com/0xsl1m/shadowshield/blob/main/docs/INDUSTRY_BENCHMARKS.md">Read the benchmarks &#8599;</a>
     </div>
   </div>
 
@@ -629,7 +654,7 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
       </div>
     </div>
     <div class="colophon">
-      <span>&copy; 2026 ShadowShield Contributors &middot; MIT License &middot; A product of <a href="https://archondigital.xyz" target="_blank" rel="noopener noreferrer" style="color:var(--ember); text-decoration:none">Archon Digital LLC</a></span>
+      <span>&copy; 2026 ShadowShield Contributors &middot; MIT License &middot; A product of <a class="footer-link" href="https://archondigital.xyz" target="_blank" rel="noopener noreferrer">Archon Digital LLC</a></span>
       <span>Set in Syne &amp; IBM Plex &middot; No tracking &middot; Shows its homework</span>
     </div>
   </footer>
@@ -637,30 +662,63 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
 </div>
 
 <script>
-  function copyPip(btn){
-    navigator.clipboard.writeText("pip install shadowshield").then(function(){
-      var t=btn.textContent; btn.textContent="Copied ✓";
-      setTimeout(function(){ btn.textContent=t; },1400);
-    });
+  function showCopyResult(btn, label){
+    var previous=btn.textContent;
+    btn.textContent=label;
+    setTimeout(function(){ btn.textContent=previous; },1400);
   }
+  function selectPip(btn){
+    var command=document.getElementById("pip");
+    var selection=window.getSelection();
+    if(command && selection){
+      var range=document.createRange();
+      range.selectNodeContents(command);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      showCopyResult(btn, "Selected");
+    }
+  }
+  function copyPip(btn){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText("pip install shadowshield").then(
+        function(){ showCopyResult(btn, "Copied ✓"); },
+        function(){ selectPip(btn); }
+      );
+    } else {
+      selectPip(btn);
+    }
+  }
+
+  var copyButton=document.getElementById("copy-pip");
+  if(copyButton){ copyButton.addEventListener("click", function(){ copyPip(copyButton); }); }
 
   var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // staggered reveal on scroll
-  var io=new IntersectionObserver(function(es){
-    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
-  },{threshold:.12, rootMargin:"0px 0px -8% 0px"});
-  document.querySelectorAll(".reveal").forEach(function(el,i){ el.style.transitionDelay=(Math.min(i,6)*60)+"ms"; io.observe(el); });
+  var revealElements=document.querySelectorAll(".reveal");
+  if(typeof window.IntersectionObserver === "function"){
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
+    },{threshold:.12, rootMargin:"0px 0px -8% 0px"});
+    revealElements.forEach(function(el){ io.observe(el); });
+  } else {
+    revealElements.forEach(function(el){ el.classList.add("in"); });
+  }
   // safety net: never strand hidden content
   setTimeout(function(){ document.querySelectorAll(".reveal:not(.in)").forEach(function(el){ el.classList.add("in"); }); }, 2400);
 
   // animate benchmark bars when the figure enters view
   var fig=document.getElementById("ladder");
-  function fillBars(){ if(fig){ fig.querySelectorAll(".track > span").forEach(function(s){ s.style.width=s.dataset.w+"%"; }); } }
-  var bo=new IntersectionObserver(function(es){
-    es.forEach(function(e){ if(e.isIntersecting){ fillBars(); bo.unobserve(e.target); }});
-  },{threshold:.25});
-  if(fig){ bo.observe(fig); setTimeout(fillBars, 2600); }
+  function fillBars(){ if(fig){ fig.querySelectorAll(".track > span").forEach(function(s){ s.classList.add("filled"); }); } }
+  if(fig && typeof window.IntersectionObserver === "function"){
+    var bo=new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ fillBars(); bo.unobserve(e.target); }});
+    },{threshold:.25});
+    bo.observe(fig);
+    setTimeout(fillBars, 2600);
+  } else {
+    fillBars();
+  }
 
   // specimen: sync the flag highlights to the scan beam
   var spec=document.getElementById("specimen");

@@ -41,7 +41,8 @@ def _max_repeat_run(text: str) -> int:
     best = run = 1
     for i in range(1, len(text)):
         run = run + 1 if text[i] == text[i - 1] else 1
-        best = max(best, run)
+        if run > best:
+            best = run
     return best
 
 

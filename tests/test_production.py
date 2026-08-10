@@ -256,6 +256,61 @@ def test_default_audit_log_is_content_free(tmp_path: Path) -> None:
     )
 
 
+def test_detector_failures_are_content_free_observable_and_optionally_fail_closed(
+    tmp_path: Path,
+) -> None:
+    class HostileError(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("exception stringification must not run")
+
+    class BrokenDetector(Detector):
+        name = "broken_test_detector"
+
+        def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
+            raise HostileError("private-detector-failure-detail")
+
+    audit_path = tmp_path / "audit.jsonl"
+    reporting = ShieldConfig.for_mode(
+        "balanced",
+        logging=LoggingConfig(audit_path=str(audit_path), redact_payloads=True),
+    )
+    reported = ss.Shield(reporting, extra_detectors=[BrokenDetector()]).scan_input("hello")
+
+    assert reported.is_safe
+    assert reported.metadata["detector_errors"] == {"broken_test_detector": 1}
+    raw_audit = audit_path.read_text(encoding="utf-8")
+    assert "private-detector-failure-detail" not in raw_audit
+    assert json.loads(raw_audit)["detector_errors"] == {"broken_test_detector": 1}
+
+    blocking = ShieldConfig.for_mode(
+        "balanced",
+        fail_closed_on_detector_error=True,
+        logging=LoggingConfig(enabled=False),
+    )
+    blocked = ss.Shield(blocking, extra_detectors=[BrokenDetector()]).scan_input("hello")
+    assert blocked.blocked
+    assert blocked.metadata["detector_errors"] == {"broken_test_detector": 1}
+
+
+def test_example_environment_cannot_start_with_known_placeholder_secrets() -> None:
+    values = dict(
+        line.split("=", 1)
+        for line in (Path(__file__).parents[1] / ".env.example")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line and not line.startswith("#")
+    )
+    required = {
+        "SHADOWSHIELD_IMAGE_DIGEST",
+        "SHADOWSHIELD_API_KEY",
+        "SHADOWSHIELD_ADMIN_KEY",
+        "SHADOWSHIELD_POLICY_KEY",
+        "SHADOWSHIELD_POLICY_STATE_KEY",
+    }
+    assert required <= values.keys()
+    assert all(values[key] == "" for key in required)
+
+
 def test_repeated_findings_are_bounded() -> None:
     cfg = ShieldConfig.for_mode(
         "balanced",

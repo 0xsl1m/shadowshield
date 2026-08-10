@@ -36,5 +36,6 @@ self-hostable.
 - **No remote kill switch.** Pushed policy can never disable protection below a
   locally-set floor (see `shadowshield.core.policy`).
 - **Honest benchmarks.** We publish false-positive rates next to detection rates, and ship
-  a deliberately harder adversarial set (`shadowshield benchmark --adversarial`) whose
-  numbers are *not* 100%.
+  deliberately difficult public generalization snapshots whose misses remain visible.
+  Public/frozen sets are regression gates only; new detector candidates require separately
+  sourced development data and a fresh sealed evaluation.

@@ -1,42 +1,165 @@
 name: Publish release container
+run-name: Container evidence for ${{ github.event.release.tag_name || inputs.release_tag }}
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing stable release tag whose trusted image evidence needs recovery
+        required: true
+        type: string
+
+concurrency:
+  group: container-release-${{ github.event.release.tag_name || inputs.release_tag }}
+  cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: write
   packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   publish:
     name: scan and publish exact image
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ github.event.release.tag_name || inputs.release_tag }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Build release image
         id: image
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+          WORKFLOW_EVENT: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [[ "$WORKFLOW_EVENT" == workflow_dispatch ]]; then
+            test "$WORKFLOW_REF" = "refs/heads/main"
+            git branch --remotes --contains "$GITHUB_SHA" | grep -Fxq "  origin/main"
+          fi
+          release_metadata="$(
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,isPrerelease,publishedAt,tagName
+          )"
+          test "$(jq -r '.tagName' <<<"$release_metadata")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$release_metadata")" = "false"
+          test "$(jq -r '.isPrerelease' <<<"$release_metadata")" = "false"
+          test "$(jq -r '.publishedAt // empty' <<<"$release_metadata")" != ""
+          release_sha="$(git rev-parse HEAD)"
+          test "$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")" = "$release_sha"
+          if [[ "$WORKFLOW_EVENT" == release ]]; then
+            test "$release_sha" = "$GITHUB_SHA"
+          fi
           package_version="$(python -c \
             'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          git branch --remotes --contains "$release_sha" | grep -Fxq "  origin/main"
           test "$package_version" = "$version"
-          docker build \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.version=$version" \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --tag "$image:$version" \
-            --tag "$image:sha-$GITHUB_SHA" \
-            .
-          echo "repository=$image" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          successful_ci="$(
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow ci.yml \
+              --commit "$release_sha" \
+              --branch main \
+              --event push \
+              --status success \
+              --json databaseId \
+              --jq '.[0].databaseId // empty' \
+              --limit 1
+          )"
+          test -n "$successful_ci"
+
+          resolve_tag_digest() {
+            local ref="$1"
+            local existing
+            if existing="$(docker manifest inspect "$ref" 2>&1)"; then
+              docker buildx imagetools inspect "$ref" \
+                --format '{{json .Manifest}}' | jq -er '.digest'
+              return
+            fi
+            if ! grep -Eqi 'manifest unknown|no such manifest' <<<"$existing"; then
+              echo "could not inspect immutable image tag $ref: $existing" >&2
+              return 1
+            fi
+            printf 'missing\n'
+          }
+
+          version_digest="$(resolve_tag_digest "$image:$version")"
+          sha_digest="$(resolve_tag_digest "$image:sha-$release_sha")"
+          version_missing="$([[ "$version_digest" == missing ]] && echo true || echo false)"
+          sha_missing="$([[ "$sha_digest" == missing ]] && echo true || echo false)"
+          if [[ "$WORKFLOW_EVENT" == workflow_dispatch ]]; then
+            if [[ "$version_missing" == true || "$sha_missing" == true ]]; then
+              echo "recovery dispatch requires both immutable release image tags" >&2
+              exit 1
+            fi
+          fi
+          resolved_digest=""
+          reused=false
+
+          if [[ "$version_missing" == true && "$sha_missing" == true ]]; then
+            docker build \
+              --label "org.opencontainers.image.revision=$release_sha" \
+              --label "org.opencontainers.image.version=$version" \
+              --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+              --tag "$image:$version" \
+              --tag "$image:sha-$release_sha" \
+              .
+          else
+            if [[ "$version_missing" == false && "$sha_missing" == false ]]; then
+              test "$version_digest" = "$sha_digest"
+            fi
+            resolved_digest="$(
+              [[ "$version_missing" == false ]] && echo "$version_digest" || echo "$sha_digest"
+            )"
+            [[ "$resolved_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker pull "$image@$resolved_digest"
+            test "$(docker image inspect --format \
+              '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+              "$image@$resolved_digest")" = "$release_sha"
+            test "$(docker image inspect --format \
+              '{{index .Config.Labels "org.opencontainers.image.version"}}' \
+              "$image@$resolved_digest")" = "$version"
+            # Registry labels are self-asserted. Reuse only content that this
+            # trusted workflow already attested for the exact source commit;
+            # otherwise a package writer could pre-seed an image and turn this
+            # release job into a provenance-signing oracle.
+            gh attestation verify "oci://$image@$resolved_digest" \
+              --repo "$GITHUB_REPOSITORY" \
+              --bundle-from-oci \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --signer-workflow \
+                "$GITHUB_REPOSITORY/.github/workflows/container-release.yml" \
+              --source-digest "$release_sha" \
+              --deny-self-hosted-runners
+            docker tag "$image@$resolved_digest" "$image:$version"
+            docker tag "$image@$resolved_digest" "$image:sha-$release_sha"
+            reused=true
+          fi
+          {
+            echo "repository=$image"
+            echo "version=$version"
+            echo "reused=$reused"
+            echo "resolved_digest=$resolved_digest"
+            echo "version_missing=$version_missing"
+            echo "sha_missing=$sha_missing"
+            echo "release_sha=$release_sha"
+            echo "release_tag=$RELEASE_TAG"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Generate CycloneDX image SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -58,23 +181,150 @@ jobs:
           skip-setup-trivy: true
 
       - name: Push the exact scanned image
+        id: push
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
           IMAGE_VERSION: ${{ steps.image.outputs.version }}
+          IMAGE_REUSED: ${{ steps.image.outputs.reused }}
+          RESOLVED_DIGEST: ${{ steps.image.outputs.resolved_digest }}
+          VERSION_MISSING: ${{ steps.image.outputs.version_missing }}
+          SHA_MISSING: ${{ steps.image.outputs.sha_missing }}
+          RELEASE_SHA: ${{ steps.image.outputs.release_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION_MISSING" == true || "$SHA_MISSING" == true ]]; then
+            printf '%s' "$GH_TOKEN" \
+              | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          fi
+
+          if [[ "$IMAGE_REUSED" == true ]]; then
+            digest="$RESOLVED_DIGEST"
+            if [[ "$VERSION_MISSING" == true ]]; then
+              docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION"
+            fi
+            if [[ "$SHA_MISSING" == true ]]; then
+              docker push "$IMAGE_REPOSITORY:sha-$RELEASE_SHA"
+            fi
+          else
+            push_output="$(docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION")"
+            printf '%s\n' "$push_output"
+            digest="$(printf '%s\n' "$push_output" \
+              | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*$/\1/p' \
+              | tail -n 1)"
+            test -n "$digest"
+            docker push "$IMAGE_REPOSITORY:sha-$RELEASE_SHA"
+          fi
+
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          tags_verified=false
+          for _ in $(seq 1 12); do
+            if version_digest="$(docker buildx imagetools inspect \
+              "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
+              --format '{{json .Manifest}}' | jq -er '.digest')" \
+              && sha_digest="$(docker buildx imagetools inspect \
+                "$IMAGE_REPOSITORY:sha-$RELEASE_SHA" \
+                --format '{{json .Manifest}}' | jq -er '.digest')" \
+              && [[ "$version_digest" == "$digest" && "$sha_digest" == "$digest" ]]; then
+              tags_verified=true
+              break
+            fi
+            sleep 5
+          done
+          test "$tags_verified" = true
+          printf '%s\n' "$digest" > container-digest.txt
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Canonicalize release SBOM
+        shell: bash
+        env:
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          temporary="$(mktemp)"
+          serial_number="$(
+            python3 - "$IMAGE_REPOSITORY@$IMAGE_DIGEST" <<'PY'
+          import sys
+          import uuid
+
+          print(f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, sys.argv[1])}")
+          PY
+          )"
+          jq --arg serial_number "$serial_number" --sort-keys \
+            'del(.metadata.timestamp) | .serialNumber = $serial_number' \
+            shadowshield-sbom.cdx.json > "$temporary"
+          jq -e '
+            .bomFormat == "CycloneDX"
+            and (.specVersion | type == "string" and length > 0)
+            and (.serialNumber | type == "string" and startswith("urn:uuid:"))
+          ' "$temporary" >/dev/null
+          mv "$temporary" shadowshield-sbom.cdx.json
+
+      - name: Authenticate for OCI attestations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           printf '%s' "$GH_TOKEN" \
             | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          push_output="$(docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION")"
-          printf '%s\n' "$push_output"
-          digest="$(printf '%s\n' "$push_output" \
-            | sed -n 's/^.*digest: \(sha256:[0-9a-f]\{64\}\).*$/\1/p' \
-            | tail -n 1)"
-          test -n "$digest"
-          printf '%s\n' "$digest" > container-digest.txt
-          docker push "$IMAGE_REPOSITORY:sha-$GITHUB_SHA"
+
+      - name: Attest release image provenance
+        if: github.event_name == 'release' && steps.image.outputs.reused != 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ steps.image.outputs.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest release image SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ steps.image.outputs.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: shadowshield-sbom.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Remove OCI registry credentials
+        if: always()
+        shell: bash
+        run: docker logout ghcr.io
+
+      - name: Verify signed release provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REPOSITORY: ${{ steps.image.outputs.repository }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+          RELEASE_SHA: ${{ steps.image.outputs.release_sha }}
+          SBOM_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 12); do
+            if gh attestation verify "oci://$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+              --repo "$GITHUB_REPOSITORY" \
+              --bundle-from-oci \
+              --predicate-type https://slsa.dev/provenance/v1 \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/container-release.yml" \
+              --source-digest "$RELEASE_SHA" \
+              --deny-self-hosted-runners \
+              && gh attestation verify "oci://$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+                --repo "$GITHUB_REPOSITORY" \
+                --bundle-from-oci \
+                --predicate-type https://cyclonedx.org/bom \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/container-release.yml" \
+                --source-digest "$SBOM_SOURCE_SHA" \
+                --deny-self-hosted-runners; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "signed provenance did not become verifiable" >&2
+          exit 1
 
       - name: Verify anonymous immutable pull
         shell: bash
@@ -95,18 +345,40 @@ jobs:
           exit 1
 
       - name: Retain release container evidence
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-container-evidence
           path: |
             container-digest.txt
             shadowshield-sbom.cdx.json
           retention-days: 90
+          overwrite: true
 
       - name: Attach digest and SBOM to the GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.image.outputs.release_tag }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" \
-            container-digest.txt shadowshield-sbom.cdx.json --clobber
+          set -euo pipefail
+          download_dir="$(mktemp -d)"
+          trap 'rm -rf "$download_dir"' EXIT
+
+          upload_or_verify_immutable() {
+            local asset="$1"
+            if gh release view "$RELEASE_TAG" --json assets \
+              --jq '.assets[].name' | grep -Fxq "$asset"; then
+              gh release download "$RELEASE_TAG" \
+                --pattern "$asset" \
+                --dir "$download_dir"
+              if ! cmp --silent "$asset" "$download_dir/$asset"; then
+                echo "refusing to replace immutable release asset $asset" >&2
+                return 1
+              fi
+              return
+            fi
+            gh release upload "$RELEASE_TAG" "$asset"
+          }
+
+          upload_or_verify_immutable container-digest.txt
+          upload_or_verify_immutable shadowshield-sbom.cdx.json

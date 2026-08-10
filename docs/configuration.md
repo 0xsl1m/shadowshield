@@ -19,11 +19,11 @@ Generate an annotated starter file with `shadowshield init > shield.yaml`.
 
 ## Modes
 
-| Mode | block_threshold | medium→ | LLM check | rate limit |
-|---|---|---|---|---|
-| `strict` | 0.45 | block | on | on (30/60s) |
-| `balanced` | 0.65 | sanitize | off | off |
-| `permissive` | 0.85 | flag | off | off |
+| Mode | block_threshold | medium→ | detector failure | LLM check | rate limit |
+|---|---|---|---|---|---|
+| `strict` | 0.45 | block | block | on | on (30/60s) |
+| `balanced` | 0.65 | sanitize | report | off | off |
+| `permissive` | 0.85 | flag | report | off | off |
 
 A mode seeds every default; any field you set in YAML or `for_mode(..., **kw)`
 layers on top.
@@ -34,6 +34,8 @@ layers on top.
 |---|---|
 | `mode` | preset posture (strict/balanced/permissive) |
 | `raise_on_block` | make `Shield.scan()` raise on a block (default false) |
+| `fail_closed_on_detector_error` | block if any detector raises; failures are always reported as content-free metadata (strict defaults true) |
+| `parallel_detectors` | fan cheap detectors out across a bounded thread pool (default false). Verdicts, ordering, and error accounting are identical to sequential — only wall-clock latency changes |
 | `block_threshold` | aggregate score that forces a block regardless of policy |
 | `policy.{none..critical}` | severity → decision mapping |
 | `detectors.<name>.enabled` | per-detector toggle |

@@ -17,16 +17,62 @@ Requires the ``vectors`` extra: ``pip install shadowshield[vectors]``.
 
 from __future__ import annotations
 
+import copy
+import json
 import threading
 from importlib import resources
+from pathlib import Path
 from typing import Any
+
+import structlog
 
 from ..core.types import Direction, Severity, Threat, ThreatCategory
 from .base import Detector, ScanContext
 
+_log = structlog.get_logger(__name__)
+
 # Multilingual by default so one corpus covers many languages (cross-lingual
 # embedding alignment). Override with any sentence-transformers model id.
 DEFAULT_EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# Bounds for the durable self-hardening store (adversary-derived content).
+_MAX_PERSISTED_ATTACKS = 10_000
+_MAX_PERSISTED_ATTACK_CHARS = 10_000
+
+
+def _fresh_exception(error: BaseException) -> BaseException:
+    """Clone a failure without sharing its mutable traceback between callers."""
+    fresh: BaseException | None = None
+    try:
+        fresh = copy.copy(error)
+    except BaseException:
+        try:
+            fresh = type(error)(*error.args)
+        except BaseException:
+            try:
+                fresh = RuntimeError(f"{type(error).__name__}: {error}")
+            except BaseException:
+                fresh = RuntimeError("index build failed")
+    if fresh is error or not isinstance(fresh, BaseException):
+        try:
+            fresh = RuntimeError(f"{type(error).__name__}: {error}")
+        except BaseException:
+            fresh = RuntimeError("index build failed")
+    try:
+        return fresh.with_traceback(None)
+    except BaseException:
+        return RuntimeError("index build failed")
+
+
+class _LoadAttempt:
+    """One index-build generation shared by every caller that encounters it."""
+
+    def __init__(self, generation: int) -> None:
+        self.generation = generation
+        self.done = threading.Event()
+        self.result: Any | None = None
+        self.error: BaseException | None = None
+        self.waiters = 0
 
 
 def _load_corpus() -> list[str]:
@@ -51,6 +97,11 @@ class VectorSimilarityDetector(Detector):
         threshold: cosine similarity at/above which a match is flagged.
         corpus: optional custom attack strings (defaults to the bundled corpus).
         lazy: load the model on first scan rather than at construction.
+        persistence_path: optional JSONL file where confirmed attacks appended via
+            :meth:`add_attack` are durably stored (one JSON string per line) and
+            reloaded on startup, so the self-hardening loop survives redeploys.
+            The file is adversary-derived content: lines are only ever parsed as
+            JSON strings, never evaluated.
 
     The detector is not auto-registered — add it via
     ``Shield(..., use_vectors=True)`` or ``extra_detectors=[VectorSimilarityDetector()]``.
@@ -66,25 +117,113 @@ class VectorSimilarityDetector(Detector):
         threshold: float = 0.72,
         corpus: list[str] | None = None,
         lazy: bool = True,
+        persistence_path: str | Path | None = None,
     ) -> None:
         self.model_id = model
         self.threshold = threshold
         # Own the mutable corpus so caller-side list changes cannot invalidate the
         # embedding row-to-corpus invariant.
-        self._corpus: list[str] = list(corpus) if corpus is not None else _load_corpus()
+        base_corpus: list[str] = list(corpus) if corpus is not None else _load_corpus()
+        self._persistence_path = Path(persistence_path) if persistence_path else None
+        self._persisted_attacks: list[str] = (
+            self._read_persisted_attacks() if self._persistence_path else []
+        )
+        self._corpus: list[str] = [*base_corpus, *self._persisted_attacks]
         self._model: Any = None
         self._corpus_emb: Any = None
         self._index_lock = threading.Lock()
+        self._load_condition = threading.Condition(self._index_lock)
+        self._load_generation = 0
+        self._load_attempt: _LoadAttempt | None = None
         self._ready = threading.Event()
         if not lazy:
             self._ensure_index()
 
+    # -- durable self-hardening ------------------------------------------ #
+    def _read_persisted_attacks(self) -> list[str]:
+        """Load previously confirmed attacks from the JSONL persistence file.
+
+        Tainted-input handling: every line must decode as a JSON string; blank,
+        malformed, non-string, and over-long lines are skipped, never evaluated.
+        """
+        path = self._persistence_path
+        assert path is not None
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:  # missing, unreadable, or not a regular file -> start empty
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > _MAX_PERSISTED_ATTACK_CHARS
+                or value in seen
+            ):
+                continue
+            seen.add(value)
+            out.append(value)
+        # Bounded growth: only the most recent attacks are kept.
+        return out[-_MAX_PERSISTED_ATTACKS:]
+
+    def _persist_attack(self, text: str) -> None:
+        """Append one confirmed attack to the JSONL file (compacting if needed).
+
+        Persistence failures must never break the hardening path — the in-memory
+        index is already updated; the worst case is relearning after a restart.
+        """
+        path = self._persistence_path
+        assert path is not None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            attacks = [*self._persisted_attacks, text]
+            if len(attacks) > _MAX_PERSISTED_ATTACKS:
+                attacks = attacks[-_MAX_PERSISTED_ATTACKS:]
+                path.write_text(
+                    "".join(json.dumps(a, ensure_ascii=False) + "\n" for a in attacks),
+                    encoding="utf-8",
+                )
+            else:
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(text, ensure_ascii=False) + "\n")
+            self._persisted_attacks = attacks
+        except OSError:
+            _log.warning("vector attack persistence failed", path=str(path))
+
     def _ensure_index(self) -> Any:
         if self._ready.is_set():
             return self._model
-        with self._index_lock:
+
+        with self._load_condition:
             if self._ready.is_set():
                 return self._model
+
+            attempt = self._load_attempt
+            if attempt is None:
+                self._load_generation += 1
+                attempt = _LoadAttempt(self._load_generation)
+                self._load_attempt = attempt
+                is_loader = True
+            else:
+                attempt.waiters += 1
+                self._load_condition.notify_all()
+                is_loader = False
+
+        if not is_loader:
+            attempt.done.wait()
+            if attempt.error is not None:
+                raise _fresh_exception(attempt.error)
+            return attempt.result
+
+        try:
             try:
                 from sentence_transformers import SentenceTransformer
             except ImportError as exc:  # pragma: no cover - optional dependency
@@ -100,9 +239,33 @@ class VectorSimilarityDetector(Detector):
             corpus_emb = model.encode(
                 list(self._corpus), normalize_embeddings=True, show_progress_bar=False
             )
+        except BaseException as exc:
+            prototype: BaseException = RuntimeError("index build failed")
+            try:
+                # Keep a traceback-free prototype. The loader re-raises ``exc``;
+                # each waiter clones the prototype so exception tracebacks cannot
+                # race or grow as the same object is raised across threads.
+                prototype = _fresh_exception(exc)
+            except BaseException:
+                # Exception subclasses can make copying, construction, or even
+                # stringification fail. They must never strand this generation.
+                pass
+            finally:
+                with self._load_condition:
+                    attempt.error = prototype
+                    self._load_attempt = None
+                    attempt.done.set()
+                    self._load_condition.notify_all()
+            raise
+
+        with self._load_condition:
             self._corpus_emb = corpus_emb
             self._model = model
+            attempt.result = model
+            self._load_attempt = None
             self._ready.set()
+            attempt.done.set()
+            self._load_condition.notify_all()
             return model
 
     def warmup(self) -> None:
@@ -133,6 +296,8 @@ class VectorSimilarityDetector(Detector):
             updated_emb = np.vstack([self._corpus_emb, emb])
             self._corpus = updated_corpus
             self._corpus_emb = updated_emb
+            if self._persistence_path is not None:
+                self._persist_attack(text)
 
     def scan(self, text: str, *, context: ScanContext) -> list[Threat]:
         body = context.normalized.normalized or text

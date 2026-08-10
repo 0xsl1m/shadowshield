@@ -18,6 +18,8 @@ symmetric, two-way protection.
 
 from __future__ import annotations
 
+import concurrent.futures
+import dataclasses
 import json
 import math
 import threading
@@ -62,6 +64,8 @@ _MAX_FINDINGS_PER_SCAN = 50
 _MAX_THREAT_MESSAGE_CHARS = 1_024
 _MAX_THREAT_MATCH_CHARS = 256
 _MAX_THREAT_METADATA_BYTES = 4_096
+_MAX_DETECTOR_ERRORS_PER_SCAN = 32
+_MAX_DETECTOR_NAME_CHARS = 128
 _JUDGE_WORKERS = 4
 
 
@@ -82,6 +86,7 @@ class Engine:
         audit: AuditLog,
         llm_judge: LLMJudge | None = None,
         alignment_judge: AlignmentJudge | None = None,
+        calibrator: Any | None = None,
     ) -> None:
         self._config = config
         self._detectors = detectors
@@ -90,6 +95,11 @@ class Engine:
         self._audit = audit
         self._llm_judge = llm_judge
         self._alignment_judge = alignment_judge
+        # Optional score calibrator (core.calibration.IsotonicCalibrator). When
+        # set, the aggregate noisy-or score is mapped to a calibrated attack
+        # probability before severity/threshold decisions, so block_threshold
+        # means the same thing across detector configurations.
+        self._calibrator = calibrator
         # User-supplied judges may hang or make network calls. Each admitted call
         # runs in a bounded daemon thread: request time is limited, queue growth is
         # impossible, and a permanently hung client cannot prevent process exit.
@@ -99,10 +109,36 @@ class Engine:
             if (llm_judge is not None or alignment_judge is not None)
             else None
         )
-        # Detector weights are read from config once.
-        self._weights = {
-            name: config.detector_config(name).weight for name in self._detector_names()
+        # Effective detector configuration and routing are immutable for an
+        # Engine. Control-plane changes construct a new Shield/Engine, so caching
+        # here avoids repeated Pydantic model construction on every scan.
+        self._detector_configs = {
+            name: config.detector_config(name) for name in self._detector_names()
         }
+        self._cheap_detectors = tuple(
+            detector for detector in self._detectors if detector.name not in _GATED_DETECTORS
+        )
+        self._llm_detector: Detector | None = next(
+            (detector for detector in self._detectors if detector.name == _LLM_DETECTOR_NAME),
+            None,
+        )
+        self._alignment_detector: Detector | None = next(
+            (detector for detector in self._detectors if detector.name == _ALIGNMENT_DETECTOR_NAME),
+            None,
+        )
+        # Detector weights are read from the cached effective config once.
+        self._weights = {
+            name: detector_config.weight for name, detector_config in self._detector_configs.items()
+        }
+        # Optional parallel fan-out for the independent cheap detectors. The pool
+        # is only allocated when explicitly enabled and there is work to spread;
+        # threads are created lazily on first scan.
+        self._executor: concurrent.futures.ThreadPoolExecutor | None = None
+        if config.parallel_detectors and len(self._cheap_detectors) > 1:
+            self._executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(4, len(self._cheap_detectors)),
+                thread_name_prefix="ss-detectors",
+            )
         # Result observers (e.g. the telemetry reporter). Invoked after every evaluate,
         # so guard()/filter()/scan()/async all report through a single chokepoint.
         self._observers: list[Callable[[ScanResult, float, str | None], None]] = []
@@ -164,8 +200,12 @@ class Engine:
         threats = self._cap_findings(threats, context)
 
         score = aggregate_score(threats, self._weights)
+        if self._calibrator is not None:
+            score = self._calibrator.predict(score)
         severity = aggregate_severity(threats, score)
         decision = self._decide(score, severity)
+        if context.detector_errors and self._config.fail_closed_on_detector_error:
+            decision = _stronger(decision, Decision.BLOCK)
         # No unscanned suffix may ever flow downstream. The result preserves the
         # original for caller inspection, but oversized payloads always receive
         # the blocker's safe fallback in every mode and policy configuration.
@@ -184,6 +224,8 @@ class Engine:
         if truncated_findings:
             result.metadata["findings_truncated"] = truncated_findings
             result.metadata["findings_total"] = len(threats) + truncated_findings
+        if context.detector_errors:
+            result.metadata["detector_errors"] = dict(sorted(context.detector_errors.items()))
 
         # Rate-limit pre-pass can escalate to BLOCK based on identity history.
         result = self._rate_limiter.check(result, context=context)
@@ -193,6 +235,8 @@ class Engine:
             preserve_detector=self._rate_limiter.name,
         )
         result.score = aggregate_score(result.threats, self._weights)
+        if self._calibrator is not None:
+            result.score = self._calibrator.predict(result.score)
         result.severity = aggregate_severity(result.threats, result.score)
         if result.metadata.get("rate_limited"):
             result.severity = max(result.severity, Severity.HIGH)
@@ -217,14 +261,50 @@ class Engine:
 
     # ------------------------------------------------------------------ #
     def _run_cheap_detectors(self, text: str, context: ScanContext) -> list[Threat]:
+        applicable = [det for det in self._cheap_detectors if det.applies_to(context.direction)]
+        if self._executor is None or len(applicable) <= 1:
+            threats: list[Threat] = []
+            for det in applicable:
+                context.options = self._detector_configs[det.name].options
+                threats.extend(self._safe_scan(det, text, context))
+            return threats
+        return self._run_detectors_parallel(text, context, applicable)
+
+    def _run_detectors_parallel(
+        self, text: str, context: ScanContext, applicable: list[Detector]
+    ) -> list[Threat]:
+        assert self._executor is not None
+
+        def run_one(det: Detector) -> tuple[list[Threat], dict[str, Any], dict[str, int]]:
+            # Each worker scans against its own shallow context copy so
+            # per-detector options and the mutable findings/error counters
+            # never race. Read-only context (normalized view, history,
+            # decoded segments) is shared by reference.
+            worker_context = dataclasses.replace(
+                context,
+                options=self._detector_configs[det.name].options,
+                metadata=dict(context.metadata),
+                detector_errors={},
+            )
+            findings = self._safe_scan(det, text, worker_context)
+            return findings, worker_context.metadata, worker_context.detector_errors
+
         threats: list[Threat] = []
-        for det in self._detectors:
-            if det.name in _GATED_DETECTORS:
-                continue  # handled separately (gated / context-injected)
-            if not det.applies_to(context.direction):
-                continue
-            context.options = self._config.detector_config(det.name).options
-            threats.extend(self._safe_scan(det, text, context))
+        # executor.map yields in submission order, so threat ordering, the
+        # findings cap and error accounting match the sequential path exactly.
+        for findings, metadata, errors in self._executor.map(run_one, applicable):
+            threats.extend(findings)
+            truncated = int(metadata.get("findings_truncated", 0))
+            if truncated:
+                context.metadata["findings_truncated"] = (
+                    int(context.metadata.get("findings_truncated", 0)) + truncated
+                )
+            for name, count in errors.items():
+                if (
+                    name in context.detector_errors
+                    or len(context.detector_errors) < _MAX_DETECTOR_ERRORS_PER_SCAN
+                ):
+                    context.detector_errors[name] = context.detector_errors.get(name, 0) + count
         return threats
 
     def _maybe_run_llm_check(
@@ -235,7 +315,7 @@ class Engine:
             return []
         if interim_score < cfg.min_score_to_invoke:
             return []
-        det = next((d for d in self._detectors if d.name == _LLM_DETECTOR_NAME), None)
+        det = self._llm_detector
         if det is None or not det.applies_to(context.direction):
             return []
         context.options = {"judge": self._with_timeout(self._llm_judge, cfg.timeout_seconds)}
@@ -246,7 +326,7 @@ class Engine:
         # wired in. This is the agent-trace alignment audit (goal-hijack detection).
         if self._alignment_judge is None or not context.objective:
             return []
-        det = next((d for d in self._detectors if d.name == _ALIGNMENT_DETECTOR_NAME), None)
+        det = self._alignment_detector
         if det is None or not det.applies_to(context.direction):
             return []
         timeout = self._config.llm_check.timeout_seconds
@@ -321,7 +401,20 @@ class Engine:
                 reverse=True,
             )[:MAX_FINDINGS_PER_DETECTOR]
         except Exception:  # pragma: no cover - defensive
-            # Fail-safe: drop this detector's contribution, keep the others.
+            # Continue the independent layers, but never make a detector failure
+            # indistinguishable from a clean scan. Names/counts are bounded and
+            # no exception message, traceback, or payload content is retained.
+            raw_name = det.name
+            name = (
+                raw_name[:_MAX_DETECTOR_NAME_CHARS]
+                if isinstance(raw_name, str) and raw_name
+                else type(det).__name__[:_MAX_DETECTOR_NAME_CHARS]
+            )
+            if (
+                name in context.detector_errors
+                or len(context.detector_errors) < _MAX_DETECTOR_ERRORS_PER_SCAN
+            ):
+                context.detector_errors[name] = context.detector_errors.get(name, 0) + 1
             return []
 
     @staticmethod
@@ -436,6 +529,7 @@ class Engine:
                 "identity_present": context.identity is not None,
                 "findings_total": result.metadata.get("findings_total", len(result.threats)),
                 "findings_truncated": result.metadata.get("findings_truncated", 0),
+                "detector_errors": result.metadata.get("detector_errors", {}),
                 "threats": [
                     {
                         "category": threat.category.value,
@@ -453,5 +547,9 @@ class Engine:
             event["text"] = truncate(result.text, 400)
         # Clean, threat-free scans are logged at DEBUG (quiet by default);
         # anything noteworthy is logged at INFO.
-        notable = bool(result.threats) or not result.is_safe
+        notable = (
+            bool(result.threats)
+            or bool(result.metadata.get("detector_errors"))
+            or not result.is_safe
+        )
         self._audit.record(event, notable=notable)

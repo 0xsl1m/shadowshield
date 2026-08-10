@@ -50,13 +50,15 @@ def load_adversarial() -> list[EvalExample]:
 def load_generalization(snapshot: str = "v2") -> list[EvalExample]:
     """Load an independently authored blind generalization snapshot.
 
-    ``v1`` and ``v2`` were authored without access to detector signatures. Use
-    ``all`` to concatenate both snapshots. These sets expose semantic coverage
-    gaps and should not be presented as training or in-distribution accuracy.
+    ``v1``, ``v2``, ``v3``, and ``v4`` were authored without access to detector
+    signatures. ``v4`` adds multilingual and indirect-injection (tool-result)
+    splits. Use ``all`` to concatenate every snapshot. These sets expose
+    semantic coverage gaps and should not be presented as training or
+    in-distribution accuracy.
     """
-    if snapshot not in {"v1", "v2", "all"}:
-        raise ValueError("snapshot must be one of: v1, v2, all")
-    versions = ("v1", "v2") if snapshot == "all" else (snapshot,)
+    if snapshot not in {"v1", "v2", "v3", "v4", "all"}:
+        raise ValueError("snapshot must be one of: v1, v2, v3, v4, all")
+    versions = ("v1", "v2", "v3", "v4") if snapshot == "all" else (snapshot,)
     examples: list[EvalExample] = []
     for version in versions:
         data = resources.files("shadowshield.eval.data").joinpath(

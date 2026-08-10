@@ -1,0 +1,17 @@
+{{- if .Values.persistence.policyState.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "shadowshield.fullname" . }}-policy-state
+  labels:
+    {{- include "shadowshield.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.persistence.policyState.storageClass }}
+  storageClassName: {{ .Values.persistence.policyState.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.policyState.size }}
+{{- end }}

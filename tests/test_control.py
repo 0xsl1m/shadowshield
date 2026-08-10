@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
 import pytest
+
+import shadowshield as ss
+from shadowshield.core.config import LoggingConfig, ShieldConfig
+from shadowshield.detectors.base import Detector, ScanContext
 
 fastapi_testclient = pytest.importorskip("fastapi.testclient")
 TestClient = fastapi_testclient.TestClient
 
 from shadowshield.control import (  # noqa: E402
     _MAX_POLICY_STATE_BYTES,
+    ScanRequest,
+    ShieldState,
+    _policy_state_mac_for_key,
     create_control_app,
     migrate_policy_state,
     serve_control,
@@ -21,6 +29,41 @@ from shadowshield.control import (  # noqa: E402
 
 def _open_app(mode: str = "balanced", **kwargs):
     return create_control_app(mode, allow_insecure_local=True, **kwargs)
+
+
+def _persist_test_policy_state(
+    state_path: Path,
+    *,
+    key: bytes = b"p" * 32,
+    mode: str = "balanced",
+) -> bytes:
+    import shadowshield.core.policy as pol
+
+    bundle = pol.PolicyBundle(
+        config={"block_threshold": 0.5},
+        bundle_id="test-durable-v1",
+        version=1,
+        issued_at=time.time(),
+    )
+    client = TestClient(
+        _open_app(
+            mode,
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    response = client.post(
+        "/api/policy",
+        json={
+            "config": bundle.config,
+            "bundle_id": bundle.bundle_id,
+            "version": bundle.version,
+            "issued_at": bundle.issued_at,
+            "signature": pol.sign_bundle(bundle, key),
+        },
+    )
+    assert response.status_code == 200
+    return state_path.read_bytes()
 
 
 # --------------------------------------------------------------------------- #
@@ -243,6 +286,27 @@ def test_prometheus_metrics_endpoint() -> None:
     assert "shadowshield_build_info{version=" in body
 
 
+def test_detector_errors_are_exposed_in_control_metrics() -> None:
+    class BrokenDetector(Detector):
+        name = 'broken"metric'
+
+        def scan(self, text: str, *, context: ScanContext) -> list[ss.Threat]:
+            raise RuntimeError("private failure detail")
+
+    state = ShieldState()
+    config = ShieldConfig.for_mode("balanced", logging=LoggingConfig(enabled=False))
+    state.shield = ss.Shield(config, extra_detectors=[BrokenDetector()])
+    result = state.scan_and_record(ScanRequest(text="hello"))
+
+    assert result["metadata"]["detector_errors"] == {'broken"metric': 1}
+    metrics = state.metrics_view()
+    assert metrics["detector_errors"] == 1
+    assert metrics["by_detector_error"] == {'broken"metric': 1}
+    prometheus = state.metrics_prometheus("test")
+    assert 'shadowshield_detector_errors_total{detector="broken\\"metric"} 1' in prometheus
+    assert "private failure detail" not in prometheus
+
+
 def test_prometheus_metrics_requires_auth() -> None:
     c = TestClient(
         create_control_app(
@@ -430,6 +494,60 @@ def test_policy_replay_state_survives_restart(tmp_path: Path) -> None:
     assert restarted.get("/api/config").json()["block_threshold"] == 0.5
 
 
+def test_policy_state_from_0_6_2_restores_with_additive_config_defaults(
+    tmp_path: Path,
+) -> None:
+    key = b"p" * 32
+    state_path = tmp_path / "policy-state.json"
+    _persist_test_policy_state(state_path, key=key)
+
+    envelope = json.loads(state_path.read_text(encoding="utf-8"))
+    effective = envelope["payload"]["effective_config"]
+    assert effective.pop("fail_closed_on_detector_error") is False
+    envelope["mac"] = _policy_state_mac_for_key(envelope["payload"], key)
+    state_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    restarted = TestClient(
+        _open_app(
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    assert restarted.get("/health").status_code == 200
+    assert restarted.post("/scan", json={"text": "hello"}).status_code == 200
+
+
+def test_policy_state_from_0_6_2_preserves_strict_detector_failure_policy(
+    tmp_path: Path,
+) -> None:
+    key = b"p" * 32
+    state_path = tmp_path / "strict-policy-state.json"
+    _persist_test_policy_state(state_path, key=key, mode="strict")
+
+    envelope = json.loads(state_path.read_text(encoding="utf-8"))
+    effective = envelope["payload"]["effective_config"]
+    assert effective.pop("fail_closed_on_detector_error") is True
+    envelope["mac"] = _policy_state_mac_for_key(envelope["payload"], key)
+    state_path.write_text(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    restarted = TestClient(
+        _open_app(
+            "strict",
+            policy_key=key,
+            policy_state_path=str(state_path),
+        )
+    )
+    restored = restarted.get("/api/config").json()
+    assert restored["mode"] == "strict"
+    assert restored["fail_closed_on_detector_error"] is True
+
+
 def test_policy_replay_state_rejects_tampering(tmp_path: Path) -> None:
     import shadowshield.core.policy as pol
 
@@ -524,6 +642,47 @@ def test_policy_replay_state_is_bounded_before_json_parsing(tmp_path: Path) -> N
 
     with pytest.raises(RuntimeError, match=r"exceeds .* byte limit"):
         _open_app(policy_key="sk", policy_state_path=str(state_path))
+
+
+def test_policy_replay_state_rejects_final_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "target.json"
+    target.write_text("{}", encoding="utf-8")
+    state_path = tmp_path / "policy-state.json"
+    try:
+        state_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        _open_app(policy_key="sk", policy_state_path=str(state_path))
+
+
+def test_policy_replay_state_rejects_non_regular_file(tmp_path: Path) -> None:
+    state_path = tmp_path / "policy-state"
+    state_path.mkdir()
+
+    with pytest.raises(RuntimeError, match="must be a regular file"):
+        _open_app(policy_key="sk", policy_state_path=str(state_path))
+
+
+def test_policy_state_persistence_does_not_reuse_predictable_temporary(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "policy-state.json"
+    victim = tmp_path / "unrelated"
+    victim.write_bytes(b"must not be overwritten")
+    predictable_temporary = state_path.with_name(f".{state_path.name}.tmp")
+    try:
+        os.link(victim, predictable_temporary)
+    except OSError as exc:
+        pytest.skip(f"hard links are unavailable: {exc}")
+
+    _persist_test_policy_state(state_path)
+
+    assert victim.read_bytes() == b"must not be overwritten"
+    assert predictable_temporary.read_bytes() == b"must not be overwritten"
+    assert state_path.is_file()
+    assert not list(tmp_path.glob(f".{state_path.name}.tmp-*"))
 
 
 def test_policy_rejects_state_too_large_to_restart_without_mutation(tmp_path: Path) -> None:
@@ -676,13 +835,17 @@ def test_offline_policy_state_migration_preserves_and_rekeys_state(tmp_path: Pat
     )
     assert response.status_code == 200
     legacy_bytes = state_path.read_bytes()
+    backup_path = tmp_path / "operator-selected-backups" / "legacy-state.json"
+    backup_path.parent.mkdir()
 
     backup = migrate_policy_state(
         state_path,
         old_key=old_key,
         new_key=new_key,
+        backup_path=backup_path,
     )
 
+    assert backup == backup_path
     assert backup.read_bytes() == legacy_bytes
     assert state_path.read_bytes() != legacy_bytes
     restarted = create_control_app(
@@ -739,6 +902,47 @@ def test_policy_state_migration_failure_keeps_source_unchanged(tmp_path: Path) -
     assert not state_path.with_name(f"{state_path.name}.pre-0.6.1.bak").exists()
 
 
+def test_policy_state_migration_rejects_source_symbolic_link(tmp_path: Path) -> None:
+    target = tmp_path / "target-state.json"
+    original = _persist_test_policy_state(target)
+    state_path = tmp_path / "policy-state.json"
+    try:
+        state_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(RuntimeError, match="must not be a symbolic link"):
+        migrate_policy_state(
+            state_path,
+            old_key=b"p" * 32,
+            new_key=b"s" * 32,
+        )
+
+    assert target.read_bytes() == original
+    assert state_path.is_symlink()
+
+
+def test_policy_state_migration_refuses_broken_symlink_backup(tmp_path: Path) -> None:
+    state_path = tmp_path / "policy-state.json"
+    original = _persist_test_policy_state(state_path)
+    backup = tmp_path / "operator-selected-backup"
+    try:
+        backup.symlink_to(tmp_path / "missing-target")
+    except OSError as exc:
+        pytest.skip(f"symbolic links are unavailable: {exc}")
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        migrate_policy_state(
+            state_path,
+            old_key=b"p" * 32,
+            new_key=b"s" * 32,
+            backup_path=backup,
+        )
+
+    assert state_path.read_bytes() == original
+    assert backup.is_symlink()
+
+
 def test_control_factory_fails_closed_without_credentials() -> None:
     with pytest.raises(RuntimeError, match="unauthenticated"):
         create_control_app("balanced")
@@ -777,3 +981,52 @@ def test_control_factory_rejects_pairwise_reused_credentials(
             policy_state_path=str(tmp_path / "state.json"),
             policy_state_key=secrets["state"],
         )
+
+
+def test_reload_endpoint_disabled_without_config_file() -> None:
+    c = TestClient(_open_app())
+    rep = c.post("/api/reload")
+    assert rep.status_code == 503
+
+
+def test_reload_endpoint_hot_swaps_yaml_config(tmp_path: Path) -> None:
+    cfg = tmp_path / "shield.yaml"
+    cfg.write_text("mode: strict\nblock_threshold: 0.55\n", encoding="utf-8")
+    app = create_control_app("balanced", allow_insecure_local=True, config_file=str(cfg))
+    c = TestClient(app)
+    rep = c.post("/api/reload")
+    assert rep.status_code == 200
+    body = rep.json()
+    assert body["reloaded"] is True
+    assert body["config"]["mode"] == "strict"
+    assert body["config"]["block_threshold"] == 0.55
+
+
+def test_reload_rejects_config_that_breaches_floor(tmp_path: Path) -> None:
+    cfg = tmp_path / "shield.yaml"
+    cfg.write_text(
+        "mode: permissive\nblock_threshold: 0.99\n"
+        "detectors:\n"
+        "  jailbreak:\n    enabled: false\n"
+        "  encoding_obfuscation:\n    enabled: false\n"
+        "  data_exfiltration:\n    enabled: false\n"
+        "  pii:\n    enabled: false\n"
+        "  anomaly:\n    enabled: false\n",
+        encoding="utf-8",
+    )
+    app = create_control_app("strict", allow_insecure_local=True, config_file=str(cfg))
+    c = TestClient(app)
+    rep = c.post("/api/reload")
+    assert rep.status_code == 400
+    # Previous shield is intact.
+    assert c.get("/api/config").json()["mode"] == "strict"
+
+
+def test_reload_rejects_missing_file(tmp_path: Path) -> None:
+    app = create_control_app(
+        "balanced",
+        allow_insecure_local=True,
+        config_file=str(tmp_path / "absent.yaml"),
+    )
+    c = TestClient(app)
+    assert c.post("/api/reload").status_code == 400

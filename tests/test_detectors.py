@@ -11,6 +11,7 @@ from shadowshield.detectors import (
     ScanContext,
     registered_detectors,
 )
+from shadowshield.detectors.anomaly import _max_repeat_run
 
 
 def _ctx(text: str, direction: Direction = Direction.INPUT) -> ScanContext:
@@ -168,3 +169,19 @@ def test_anomaly_detector_quiet_on_normal_text() -> None:
     text = "Hello, I would like to book a table for two at seven o'clock tonight."
     threats = det.scan(text, context=_ctx(text))
     assert threats == []
+
+
+def test_max_repeat_run_matches_reference_across_generated_inputs() -> None:
+    import random
+
+    def reference(text: str) -> int:
+        best = run = 1
+        for index in range(1, len(text)):
+            run = run + 1 if text[index] == text[index - 1] else 1
+            best = max(best, run)
+        return best
+
+    generator = random.Random(0)
+    cases = ["", "a", "aaaa", "abababa", "x" * 10_000]
+    cases.extend("".join(generator.choice("abc !") for _ in range(length)) for length in range(256))
+    assert all(_max_repeat_run(text) == reference(text) for text in cases)
