@@ -4,7 +4,15 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-08-10
+
+### Added — Chinese (Simplified) signatures (#9, first external contribution)
+
+- Four zh-CN signatures in `PromptInjectionDetector` (override ×2, role
+  reassignment, system-prompt extraction) with a matching prefilter group —
+  the first CJK coverage at the deterministic tier. Split-override design
+  avoids the `忘记你的密码提示词` ("forget your password hint") false positive;
+  9 attack samples + 9 hard negatives. Thanks @01luyicheng.
 
 ### Added — classifier tranche (2026-08-09)
 
@@ -512,6 +520,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.8.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.0
 [0.7.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.7.0
 [0.6.3]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.3
 [0.6.2]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.2
