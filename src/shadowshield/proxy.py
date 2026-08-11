@@ -308,14 +308,38 @@ def create_proxy_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    async def _safe_scan(text: str, direction: Direction, identity: str | None) -> Any | None:
+        """Scan with fail-open semantics: a detector exception must never 500
+        the caller's LLM request. The error is logged for operators."""
+        try:
+            return await asyncio.to_thread(
+                shield.scan, text, direction=direction, identity=identity
+            )
+        except Exception:
+            logger.exception("shadowshield.proxy.scan_error", direction=direction.value)
+            return None
+
+    def _shadow_log(event: str, result: Any) -> None:
+        """Emit shadow data for every non-clean, non-terminal verdict.
+
+        Permissive mode blocks almost nothing by design; without this, the
+        signal an operator needs before enforcing (what *would* balanced
+        flag/sanitize/block?) is computed and then silently discarded."""
+        logger.info(
+            event,
+            decision=result.decision.value,
+            severity=result.severity.name,
+            score=round(result.score, 4),
+        )
+
     async def _scan_request_messages(payload: dict[str, Any], identity: str | None) -> Any | None:
         """Return a 403 response if any message terminates, else None."""
         if not scan_request:
             return None
         for text in _message_texts(payload):
-            result = await asyncio.to_thread(
-                shield.scan, text, direction=Direction.INPUT, identity=identity
-            )
+            result = await _safe_scan(text, Direction.INPUT, identity)
+            if result is None:
+                continue
             if _is_terminal(result):
                 logger.warning(
                     "shadowshield.proxy.request_blocked",
@@ -324,6 +348,8 @@ def create_proxy_app(
                     score=round(result.score, 4),
                 )
                 return JSONResponse(status_code=403, content=_blocked_error(result, "request"))
+            if result.threats:
+                _shadow_log("shadowshield.proxy.request_flagged", result)
         return None
 
     async def _forward_non_stream(
@@ -337,9 +363,9 @@ def create_proxy_app(
             parsed = _try_json(upstream_response.text)
             if parsed is not None:
                 for text in _response_texts(parsed):
-                    result = await asyncio.to_thread(
-                        shield.scan, text, direction=Direction.OUTPUT, identity=identity
-                    )
+                    result = await _safe_scan(text, Direction.OUTPUT, identity)
+                    if result is None:
+                        continue
                     if _is_terminal(result):
                         logger.warning(
                             "shadowshield.proxy.response_blocked",
@@ -350,6 +376,8 @@ def create_proxy_app(
                         return JSONResponse(
                             status_code=403, content=_blocked_error(result, "response")
                         )
+                    if result.threats:
+                        _shadow_log("shadowshield.proxy.response_flagged", result)
         return Response(
             content=upstream_response.content,
             status_code=upstream_response.status_code,
@@ -392,7 +420,13 @@ def create_proxy_app(
                                     first_chunk = parsed
                                 delta = _stream_delta_text(parsed)
                                 if delta and scan_response:
-                                    terminal = await asyncio.to_thread(scanner.feed, delta)
+                                    try:
+                                        terminal = await asyncio.to_thread(scanner.feed, delta)
+                                    except Exception:
+                                        logger.exception(
+                                            "shadowshield.proxy.scan_error", direction="output"
+                                        )
+                                        terminal = None
                                     if terminal is not None:
                                         blocked_result = terminal
                                         break
@@ -408,8 +442,12 @@ def create_proxy_app(
                     yield _content_filter_tail(first_chunk)
                     return
                 if scan_response:
-                    final = await asyncio.to_thread(scanner.finalize)
-                    if _is_terminal(final):
+                    try:
+                        final = await asyncio.to_thread(scanner.finalize)
+                    except Exception:
+                        logger.exception("shadowshield.proxy.scan_error", direction="output")
+                        final = None
+                    if final is not None and _is_terminal(final):
                         # Tail text already flowed to the caller; the scan is
                         # still recorded so operators see the near-miss.
                         logger.warning(
