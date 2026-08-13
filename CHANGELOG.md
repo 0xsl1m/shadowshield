@@ -4,6 +4,18 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`build_mcp_server` supports `mcp` 2.x**: the MCP integration now targets
+  `mcp.server.MCPServer` (2.x) with a fallback to `mcp.server.fastmcp.FastMCP`
+  (1.x); both are exercised in CI-compatible smoke tests. The `[mcp]` extra is
+  unpinned to `mcp>=1.0`.
+- **`on_activity` callback on `build_mcp_server`**: invoked on every guarded
+  tool call so long-lived stdio launchers can run idle-timeout watchdogs
+  without redefining the tools locally.
+
 ## [0.8.1] - 2026-08-13
 
 ### Fixed — proxy rollout safety (#27)
