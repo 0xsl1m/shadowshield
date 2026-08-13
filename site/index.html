@@ -383,6 +383,7 @@
       <a class="plain" href="#benchmarks">Benchmarks</a>
       <a class="plain" href="#defense">Defense</a>
       <a class="plain" href="#compare">Compare</a>
+      <a class="plain" href="#harness">Harness</a>
       <a class="gh" href="https://github.com/0xsl1m/shadowshield">GitHub&nbsp;&#8599;</a>
     </nav>
   </div>
@@ -602,6 +603,7 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
           <tr><td>Multilingual signatures</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="us yes">&#10003;</td></tr>
           <tr><td>Canary tokens</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="yes">&#10003;*</td><td class="us yes">&#10003;</td></tr>
           <tr><td>Agent-trace alignment audit</td><td class="no">&mdash;</td><td class="yes">&#10003;</td><td class="no">&mdash;</td><td class="us yes">&#10003;</td></tr>
+          <tr><td>Desktop MCP guard server</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="us yes">&#10003;</td></tr>
           <tr><td>Spotlighting as a response</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="us yes">&#10003;</td></tr>
           <tr><td>Self-hardening vector tier</td><td class="no">&mdash;</td><td class="no">&mdash;</td><td class="yes">&#10003;*</td><td class="us yes">&#10003;</td></tr>
           <tr><td>Published external benchmark</td><td class="no">partial</td><td class="yes">&#10003;</td><td class="no">&mdash;</td><td class="us yes">&#10003;</td></tr>
@@ -610,6 +612,41 @@ with shield.<span class="f">session</span>(objective=task) <span class="k">as</s
       </table>
     </div>
     <p class="fnote">*Rebuff pioneered canary tokens &amp; the self-hardening loop, but was archived in 2025 — ShadowShield carries those ideas forward, maintained. Full matrix in <a href="https://github.com/0xsl1m/shadowshield/blob/main/docs/COMPARISON.md">docs/COMPARISON.md</a>.</p>
+  </section>
+
+  <!-- ===================== §6 HARNESS ===================== -->
+  <section id="harness">
+    <div class="sec-head"><span class="no">06</span><h2>Guard the harness itself</h2></div>
+    <p class="sec-lead">Desktop agents spawn MCP tools all day — each call and each untrusted result is an injection surface. ShadowShield ships a stdio MCP server that guards both, in front of whatever tools you already run.</p>
+    <div class="code-grid">
+      <div class="listing glass reveal">
+        <div class="lh"><b>claude_desktop_config.json</b><span>same shape for Codex &amp; Kimi</span></div>
+<pre>{
+  <span class="s">"mcpServers"</span>: {
+    <span class="s">"shadowshield"</span>: {
+      <span class="s">"command"</span>: <span class="s">"python"</span>,
+      <span class="s">"args"</span>: [<span class="s">"shadowshield_mcp_server.py"</span>, <span class="s">"--mode"</span>, <span class="s">"balanced"</span>]
+    }
+  }
+}</pre>
+      </div>
+      <div class="listing glass reveal">
+        <div class="lh"><b>embed_it.py</b><span>mcp 1.x &amp; 2.x</span></div>
+<pre><span class="k">from</span> shadowshield.integrations.mcp <span class="k">import</span> build_mcp_server
+
+<span class="c"># exposes guard_tool_call / guard_tool_result</span>
+server = <span class="f">build_mcp_server</span>(
+    ss.Shield.for_mode(<span class="s">"balanced"</span>),
+    on_activity=watchdog.ping,  <span class="c"># idle-timeout hook</span>
+)
+server.<span class="f">run</span>()  <span class="c"># stdio; clients respawn on demand</span></pre>
+      </div>
+    </div>
+    <div class="catches reveal">
+      <div class="catch"><span class="mk">&#182;</span><div><h4>Content-free verdicts</h4><p>Tool results are judged, never echoed — verdicts carry detector names and decisions, not payloads.</p></div></div>
+      <div class="catch"><span class="mk">&#182;</span><div><h4>Version-proof</h4><p>Speaks both <code>mcp</code> 1.x (FastMCP) and 2.x (MCPServer) — one integration, no pin dance.</p></div></div>
+      <div class="catch"><span class="mk">&#182;</span><div><h4>Well-behaved citizen</h4><p>An idle-timeout watchdog reaps stale sessions; desktop clients respawn stdio servers on demand.</p></div></div>
+    </div>
   </section>
 
   <!-- ===================== CLOSER ===================== -->

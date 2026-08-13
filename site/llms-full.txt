@@ -317,6 +317,18 @@ shield.scan_tool_call("send_email", {"to": addr, "body": body})   # before it ru
 shield.scan_tool_result("fetch_url", page_html)                   # indirect-injection vector
 ```
 
+As an MCP server for desktop harnesses (Claude Desktop, Codex, Kimi — any
+MCP client). Supports both `mcp` 1.x and 2.x; verdicts are content-free
+(detector metadata only, never payloads). `on_activity` feeds idle watchdogs
+in long-lived stdio launchers.
+
+```python
+from shadowshield.integrations.mcp import build_mcp_server
+
+server = build_mcp_server(ss.Shield.for_mode("balanced"), on_activity=watchdog.ping)
+server.run()  # stdio transport
+```
+
 ### Agent-trace alignment audit (goal-hijack detection)
 
 The LlamaFirewall *AlignmentCheck* pattern: audit whether an action serves the
