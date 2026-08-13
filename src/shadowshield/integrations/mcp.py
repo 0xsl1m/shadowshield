@@ -76,7 +76,9 @@ def build_mcp_server(shield: Shield | None = None, *, name: str = "shadowshield"
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("build_mcp_server requires the 'mcp' package: pip install mcp") from exc
+        raise ImportError(
+            "build_mcp_server requires the 'mcp' package: pip install 'shadowshield[mcp]'"
+        ) from exc
 
     guard = ToolGuard(shield)
     server = FastMCP(name)  # pragma: no cover - exercised only with mcp installed
