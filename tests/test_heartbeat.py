@@ -97,6 +97,24 @@ class TestDedupeAndFailOpen:
         sent: list[dict] = []
         assert maybe_send_heartbeat(2, state_path=state_path, transport=sent.append) is True
 
+    def test_rejects_dangerous_collector_urls(
+        self, monkeypatch: pytest.MonkeyPatch, state_path: Path
+    ) -> None:
+        monkeypatch.setenv("SHADOWSHIELD_HEARTBEAT", "1")
+        sent: list[dict] = []
+        for bad in (
+            "file:///etc/passwd",
+            "ftp://collector.local/hb",
+            "https://user:pw@collector.local/hb",
+            "https://collector.local/hb#frag",
+            "not-a-url",
+            "",
+        ):
+            monkeypatch.setenv("SHADOWSHIELD_HEARTBEAT_URL", bad)
+            assert maybe_send_heartbeat(1, state_path=state_path, transport=sent.append) is False
+        assert sent == []
+        assert not state_path.exists()  # refused before any state write
+
 
 class TestControlAppWiring:
     def test_heartbeat_thread_not_started_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:

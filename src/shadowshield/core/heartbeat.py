@@ -31,6 +31,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -39,6 +40,26 @@ _log = structlog.get_logger(__name__)
 _ENABLED_ENV = "SHADOWSHIELD_HEARTBEAT"
 _URL_ENV = "SHADOWSHIELD_HEARTBEAT_URL"
 _INTERVAL_S = 24 * 3600
+
+
+def _sanitize_collector_url(url: str) -> str | None:
+    """Validate the operator-configured collector URL before any request.
+
+    The URL comes from the operator's own env var (equivalent to a webhook
+    config), but we still constrain it: http(s) only, no credentials, no
+    fragments. Anything else is refused.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme not in {"https", "http"}:
+        return None
+    if not parsed.hostname:
+        return None
+    if parsed.username or parsed.password or parsed.fragment:
+        return None
+    return url
 
 
 def _state_path() -> Path:
@@ -87,6 +108,10 @@ def maybe_send_heartbeat(
     url = os.environ.get(_URL_ENV)
     if not url:
         return False
+    safe_url = _sanitize_collector_url(url)
+    if safe_url is None:
+        _log.debug("shadowshield.heartbeat.invalid_url")
+        return False
 
     path = state_path or _state_path()
     try:
@@ -102,7 +127,7 @@ def maybe_send_heartbeat(
         else:  # pragma: no cover - network path
             import httpx
 
-            httpx.post(url, json=payload, timeout=5.0)
+            httpx.post(safe_url, json=payload, timeout=5.0)
 
         _save_state(path, {"install_id": install_id, "last_sent": now})
         _log.debug("shadowshield.heartbeat.sent")
