@@ -1,0 +1,33 @@
+name: Security scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly sweep (catches newly disclosed patterns against history)
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # full history — secrets hide in old commits
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "true"
+
+  # NOTE: CodeQL is intentionally not run here as an advanced configuration.
+  # This repo uses GitHub's CodeQL *default setup* (Settings → Code security),
+  # which already analyzes python + actions on every push/PR. An advanced
+  # workflow submission is rejected with "cannot be processed when the default
+  # setup is enabled".
