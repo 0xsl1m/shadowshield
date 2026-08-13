@@ -4,6 +4,25 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-08-13
+
+### Fixed — proxy rollout safety (#27)
+
+- **Fail-open on scanner exceptions**: a detector exception in the proxy's
+  request/response/stream scan paths previously propagated as a 500 to the
+  caller's LLM request. Now logged (`shadowshield.proxy.scan_error`) and
+  treated as no-verdict — a guard bug can no longer take down wired harnesses.
+- **Shadow logging at proxy scope**: permissive mode now emits
+  `shadowshield.proxy.request_flagged` / `response_flagged` for every
+  non-terminal finding, so a shadow deployment can see what enforcing modes
+  *would* do before flipping to `balanced`.
+
+### Fixed — MCP integration packaging
+
+- New `[mcp]` extra (`pip install "shadowshield[mcp]"`): `build_mcp_server`
+  previously had no declared dependency and broke on `mcp` 2.0 (FastMCP moved).
+  Pinned to `mcp>=1.0,<2` until the integration is ported to the 2.0 API.
+
 ## [0.8.0] - 2026-08-10
 
 ### Added — Chinese (Simplified) signatures (#9, first external contribution)
@@ -520,6 +539,7 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.8.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.1
 [0.8.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.0
 [0.7.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.7.0
 [0.6.3]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.6.3

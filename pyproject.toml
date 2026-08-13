@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "shadowshield"
-version = "0.8.0"
+version = "0.8.1"
 description = "Unified open-source security shield for agentic AI systems — inspired by Sentinel & ShadowClaw."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -58,6 +58,8 @@ pii = ["presidio-analyzer>=2.2", "presidio-anonymizer>=2.2"]
 datasets = ["datasets>=2.18"]
 # FastAPI dashboard + CLI server.
 dashboard = ["fastapi>=0.110", "uvicorn>=0.29"]
+# MCP guard server (build_mcp_server). FastMCP moved in mcp 2.0; pinned to 1.x.
+mcp = ["mcp>=1.0,<2"]
 # Framework integrations (only needed if you wire ShadowShield into them).
 langchain = ["langchain-core>=0.2"]
 # Everything, for convenience.
@@ -73,6 +75,7 @@ all = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "langchain-core>=0.2",
+    "mcp>=1.0,<2",
 ]
 # Development & test tooling.
 dev = [
