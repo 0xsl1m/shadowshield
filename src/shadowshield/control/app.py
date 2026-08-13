@@ -6,6 +6,8 @@ for the package overview and the public re-exports.
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -26,12 +28,28 @@ from .._security import (
     resolve_policy_state_path,
     secret_groups_overlap,
 )
+from ..core.heartbeat import maybe_send_heartbeat
 from ..core.policy import PolicyBundle, PolicyRejected, make_hmac_verifier
 from .models import ConfigPatch, PolicyBundleIn, ScanRequest
 from .policy_state import _MIN_POLICY_STATE_KEY_BYTES
 from .state import ShieldState
 
 _STATIC = Path(__file__).parent.parent / "static" / "dashboard.html"
+
+
+def _start_heartbeat(state: ShieldState) -> None:
+    """Start the opt-in usage-heartbeat loop (no-op unless enabled via env)."""
+    if os.environ.get("SHADOWSHIELD_HEARTBEAT") != "1":
+        return  # opt-in only: don't even spawn the thread when disabled
+
+    def _loop() -> None:
+        time.sleep(60)  # let startup settle; dedupe inside handles 24h cadence
+        while True:
+            maybe_send_heartbeat(state.services_seen())
+            time.sleep(3600)
+
+    thread = threading.Thread(target=_loop, name="shadowshield-heartbeat", daemon=True)
+    thread.start()
 
 
 # --------------------------------------------------------------------------- #
@@ -136,6 +154,7 @@ def create_control_app(
     )
     if warmup_detectors:
         state.shield.warmup()
+    _start_heartbeat(state)
     policy_verifier = make_hmac_verifier(_pk) if _pk else None
     scan_keys = list(dict.fromkeys([*keys, *admins]))
     admin_api_required = bool(keys or admins) and not allow_insecure_local

@@ -4,6 +4,16 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in usage heartbeat**: when `SHADOWSHIELD_HEARTBEAT=1` and
+  `SHADOWSHIELD_HEARTBEAT_URL` are both set, `serve` sends one anonymous packet
+  per 24h — `{anon_install_id, version, num_services_seen, ts}` and nothing else
+  (no hostnames, IPs, keys, or payloads). Default is fully off; state lives in
+  `~/.shadowshield/heartbeat.json`; fail-open on any error.
+
 ## [0.8.2] - 2026-08-13
 
 ### Added

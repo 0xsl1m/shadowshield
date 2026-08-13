@@ -610,6 +610,11 @@ shadowshield serve --control --api-key SECRET      # require X-API-Key / Bearer 
   Programmatic API: `shadowshield.core.policy` (`apply_bundle`, `ProtectionFloor`).
 - **Content-free telemetry (opt-in)**: `from shadowshield import Reporter, attach_reporter`
   — exports scan *metadata* (no payloads, hashed identity) to a collector, off the hot path.
+- **Usage heartbeat (opt-in)**: set `SHADOWSHIELD_HEARTBEAT=1` and
+  `SHADOWSHIELD_HEARTBEAT_URL` to send one anonymous packet per 24h from `serve`:
+  `{anon_install_id, version, num_services_seen, ts}` — no hostnames, IPs, keys, or
+  payloads, ever. Unset env vars mean zero network calls. State lives in
+  `~/.shadowshield/heartbeat.json`; delete it to rotate the install id.
 - **MCP tool guarding**: `from shadowshield.integrations import ToolGuard` — allow/block
   verdicts for agent tool calls and untrusted tool results.
 
