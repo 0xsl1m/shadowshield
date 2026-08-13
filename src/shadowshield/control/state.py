@@ -98,6 +98,9 @@ class ShieldState:
             raise RuntimeError("durable policy state requires an authentication key")
         self._highest_policy_version = 0
         self._seen_policy_bundle_ids: set[str] = set()
+        # Distinct scan identities seen this process (heartbeat's
+        # num_services_seen; bounded, in-memory only, never leaves the node).
+        self._identities: set[str] = set()
         self._restored_policy_config: dict[str, Any] | None = None
         self._restored_active_policy: dict[str, Any] | None = None
         self._load_policy_state()
@@ -489,6 +492,8 @@ class ShieldState:
                 "detector_errors": dict(detector_errors),
             }
             self.events.appendleft(event)
+            if req.identity is not None and len(self._identities) < 10_000:
+                self._identities.add(req.identity)
             self._scans_total += 1
             self._dec_total[result.decision.value] = (
                 self._dec_total.get(result.decision.value, 0) + 1
@@ -542,6 +547,11 @@ class ShieldState:
                 "events": list(islice(self.events, limit)),
                 "total": len(self.events),
             }
+
+    def services_seen(self) -> int:
+        """Count of distinct service identities observed (capped at 10k)."""
+        with self._lock:
+            return len(self._identities)
 
     def metrics_view(self) -> dict[str, Any]:
         with self._lock:
