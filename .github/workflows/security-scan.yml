@@ -23,20 +23,11 @@ jobs:
           fetch-depth: 0 # full history — secrets hide in old commits
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: "true"
 
-  codeql:
-    name: codeql (python)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
-        with:
-          languages: python
-          queries: security-and-quality
-      - uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
+  # NOTE: CodeQL is intentionally not run here as an advanced configuration.
+  # This repo uses GitHub's CodeQL *default setup* (Settings → Code security),
+  # which already analyzes python + actions on every push/PR. An advanced
+  # workflow submission is rejected with "cannot be processed when the default
+  # setup is enabled".
