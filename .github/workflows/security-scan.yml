@@ -16,6 +16,7 @@ jobs:
   gitleaks:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -27,6 +28,7 @@ jobs:
   codeql:
     name: codeql (python)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       actions: read
       contents: read
