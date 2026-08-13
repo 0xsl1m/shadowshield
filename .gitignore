@@ -52,3 +52,20 @@ _bench/
 perf_results.json
 pg2_22m_results.json
 industry_bench_results.json
+
+# Local-only workspace scratch (never commit)
+_dryrun_clf.py
+_industry_bench.py
+_perf_bench.py
+classifier_calib*.json
+uv.lock
+
+# Local deployment stack (machine-specific; docs live in the runbook)
+deploy/local/
+
+# SaaS dashboard prototype — gated by docs/DASHBOARD_SAAS_PLAN_2026-08-07.md
+# Phase 0; must not enter the MIT tree before the demand gate passes.
+dashboard-saas/
+
+# Private SaaS strategy docs (open-core boundary terms, pricing) — local only
+docs/DASHBOARD_SAAS_PLAN*.md
