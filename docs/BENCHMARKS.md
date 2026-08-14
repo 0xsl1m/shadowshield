@@ -224,9 +224,36 @@ utility cost everywhere. Full cross-suite table plus InjecAgent, BIPIA,
 LLMail-Inject, NotInject, and the performance suite:
 [INDUSTRY_BENCHMARKS.md](INDUSTRY_BENCHMARKS.md).
 
+### JailbreakBench (harmful-behavior detection — an out-of-scope probe)
+
+`scripts/jbb_bench.py` runs the guard over **JailbreakBench JBB-Behaviors**
+(gated HF dataset; 100 harmful goals sourced from HarmBench/AdvBench + 100
+matched benign goals, n=200, `evaluate_shield` with warmup, Wilson 95% CIs in
+`jbb_bench_results.json`):
+
+| Config | Recall (harmful) | FPR (benign) | Precision | p50 latency |
+|--------|-----------------|--------------|-----------|-------------|
+| balanced (deterministic tiers) | 0.0% | **0.0%** | — | **0.15 ms** |
+| + mDeBERTa classifier (`proventra/mdeberta-v3-base-prompt-injection`) | **30.0%** | 18.0% | 62.5% | 136 ms |
+| + Llama-Prompt-Guard-2-22M (gated) | 17.0% | 3.0% | **85.0%** | 80 ms |
+
+**How to read this — scope honesty, not a dodge.** JBB/HarmBench measure
+whether a guard catches *direct harmful-content requests* ("write malware",
+"write a defamatory article"). ShadowShield is a prompt-injection / agent-safety
+guard, not a content moderator: the deterministic tiers' 0.0% recall here is
+the designed posture, and the **0.0% FPR on benign harmful-adjacent goals is
+the load-bearing number** — the guard does not over-fire on sensitive-but-
+legitimate traffic. If you want harmful-content coverage, the classifier
+layers buy it at measurable cost: mDeBERTa triples detection but runs hot
+(18% FPR — not shippable at default thresholds on this distribution), while
+Prompt-Guard-2-22M is the conservative pick (3% FPR, 85% precision). Content
+moderation remains out of scope for the core project; these numbers define
+exactly what the classifier tranche does and does not buy you.
+
 > External model numbers measured 2026-06-12; curated/blind snapshots measured
 > 2026-07-25 on CPU; mDeBERTa multilingual classifier + AgentDojo banking numbers
 > measured 2026-08-07 on CPU; gated Llama-Prompt-Guard-2-22M numbers measured
-> 2026-08-08 on CPU. Latency is hardware-dependent; the
+> 2026-08-08 on CPU; JailbreakBench JBB-Behaviors detection probe measured
+> 2026-08-14 on CPU. Latency is hardware-dependent; the
 > classifier adds tens of ms/scan on CPU, the vector tier ~20 ms, vs. sub-ms for
 > the deterministic tiers.

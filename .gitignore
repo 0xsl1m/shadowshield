@@ -52,6 +52,7 @@ _bench/
 perf_results.json
 pg2_22m_results.json
 industry_bench_results.json
+jbb_bench_results.json
 
 # Local-only workspace scratch (never commit)
 _dryrun_clf.py
