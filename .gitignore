@@ -63,6 +63,9 @@ uv.lock
 # Local deployment stack (machine-specific; docs live in the runbook)
 deploy/local/
 
+# Local harness routing docs (machine-specific ops scratch)
+agents/
+
 # SaaS dashboard prototype — gated by docs/DASHBOARD_SAAS_PLAN_2026-08-07.md
 # Phase 0; must not enter the MIT tree before the demand gate passes.
 dashboard-saas/
