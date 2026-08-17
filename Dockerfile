@@ -20,8 +20,8 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1" \
-    && rm -f /usr/local/lib/python*/ensurepip/bundled/setuptools-*.whl
+    && python -m pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" \
+    && rm -rf /usr/local/lib/python*/ensurepip
 
 RUN addgroup --system shadowshield \
     && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \
