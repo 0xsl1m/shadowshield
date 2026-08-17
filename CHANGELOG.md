@@ -4,7 +4,7 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-08-17
 
 ### Added
 
@@ -568,6 +568,8 @@ Initial public release. ShadowShield unifies *Sentinel* (detection) and
   routed to stderr.
 - 60 unit/integration tests covering the attack catalogue; strict typing; MIT.
 
+[0.9.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.9.0
+[0.8.2]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.2
 [0.8.1]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.1
 [0.8.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.8.0
 [0.7.0]: https://github.com/0xsl1m/shadowshield/releases/tag/v0.7.0
