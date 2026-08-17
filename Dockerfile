@@ -19,7 +19,8 @@ ENV PYTHONUNBUFFERED=1 \
 # HIGH/CRITICAL CVEs. Everything else in this image stays lockfile-pinned.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --upgrade "setuptools>=78.1.1"
 
 RUN addgroup --system shadowshield \
     && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \
