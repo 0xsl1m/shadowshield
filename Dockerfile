@@ -14,6 +14,13 @@ FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# Apply OS security updates at build time: the digest-pinned base image lags
+# Debian security point releases, and the CI Trivy gate rejects fixable
+# HIGH/CRITICAL CVEs. Everything else in this image stays lockfile-pinned.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN addgroup --system shadowshield \
     && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \
     && mkdir -p /var/lib/shadowshield \
