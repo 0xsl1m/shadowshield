@@ -501,8 +501,9 @@ class Engine:
     def _decide(self, score: float, severity: Severity) -> Decision:
         decision = self._config.policy.decide(severity)
         # Independent floor: a high aggregate score forces at least a block even
-        # if the per-band policy was lenient.
-        if score >= self._config.block_threshold:
+        # if the per-band policy was lenient. A threshold of 1.0 disables the
+        # floor (shadow mode: nothing ever blocks).
+        if self._config.block_threshold < 1.0 and score >= self._config.block_threshold:
             decision = _stronger(decision, Decision.BLOCK)
         return decision
 

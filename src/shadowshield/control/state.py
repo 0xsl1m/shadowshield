@@ -328,7 +328,7 @@ class ShieldState:
                 baseline=self._baseline_config,
             )
             current = self.shield.config
-            mode_rank = {"permissive": 0, "balanced": 1, "strict": 2}
+            mode_rank = {"shadow": -1, "permissive": 0, "balanced": 1, "strict": 2}
             current_mode = (
                 current.mode.value if hasattr(current.mode, "value") else str(current.mode)
             )

@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`shadow` mode**: a fourth preset posture for pure observation — every
+  severity band flags/logs and nothing ever blocks or sanitizes, including
+  via the `block_threshold` floor (a threshold of 1.0 now disables the floor).
+  This is the true canary/rollout posture: `permissive` still blocks
+  critical-severity payloads by design (unchanged), which bit real gateway
+  deployments when benign-but-credential-shaped context scored ≥ 0.85.
+  Use `--mode shadow` on `serve`/`proxy`/dashboard for measure-first rollouts.
 - **Opt-in usage heartbeat**: when `SHADOWSHIELD_HEARTBEAT=1` and
   `SHADOWSHIELD_HEARTBEAT_URL` are both set, `serve` sends one anonymous packet
   per 24h — `{anon_install_id, version, num_services_seen, ts}` and nothing else

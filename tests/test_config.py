@@ -24,6 +24,16 @@ def test_for_mode_overrides() -> None:
     assert cfg.mode == Mode.BALANCED
 
 
+def test_shadow_preset_is_pure_observation() -> None:
+    cfg = ShieldConfig.for_mode("shadow")
+    assert cfg.mode == Mode.SHADOW
+    assert cfg.block_threshold == 1.0  # floor disabled
+    for sev in (Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL):
+        assert cfg.policy.decide(sev) == Decision.FLAG
+    assert cfg.policy.decide(Severity.NONE) == Decision.ALLOW
+    assert cfg.fail_closed_on_detector_error is False
+
+
 def test_policy_decide_maps_every_severity() -> None:
     policy = PolicyConfig()
     for sev in Severity:
