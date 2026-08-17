@@ -1,0 +1,16 @@
+# Trivy ignore list — each entry must be justified, scoped, and reviewed.
+# Next review: 2026-11-17.
+
+# msgpack 1.1.2 is pip's *vendored* copy (pip/_vendor/msgpack) inside the
+# python:3.14-slim toolchain. The ShadowShield server never imports msgpack
+# and pip is not invoked at container runtime, so the OOB-read is not
+# reachable in the shipped process. Un-ignore as soon as upstream pip revendors
+# msgpack >= 1.2.1, then upgrade pip in the Dockerfile.
+GHSA-6v7p-g79w-8964
+
+# setuptools 70.3.0 remains detectable in the base image's interpreter layer
+# (ensurepip/pkg toolchain) even though the runtime site-packages carries
+# setuptools >= 78.1.1. The server does not import setuptools at runtime;
+# the path-traversal is a build-tool issue, not a serving-path issue.
+# Re-check after the next python:3.14-slim digest refresh.
+CVE-2025-47273

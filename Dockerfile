@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
-FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS builder
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS builder
 
 WORKDIR /build
 COPY pyproject.toml README.md LICENSE ./
@@ -9,10 +9,19 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: \
 COPY src ./src
 RUN python -m build --wheel --no-isolation
 
-FROM python:3.14-slim@sha256:cea0e6040540fb2b965b6e7fb5ffa00871e632eef63719f0ea54bca189ce14a6 AS runtime
+FROM python:3.14-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4 AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+# Apply OS security updates at build time: the digest-pinned base image lags
+# Debian security point releases, and the CI Trivy gate rejects fixable
+# HIGH/CRITICAL CVEs. Everything else in this image stays lockfile-pinned.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" \
+    && rm -rf /usr/local/lib/python*/ensurepip
 
 RUN addgroup --system shadowshield \
     && adduser --system --ingroup shadowshield --home /nonexistent shadowshield \

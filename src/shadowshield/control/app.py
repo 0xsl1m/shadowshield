@@ -442,7 +442,9 @@ def main() -> None:  # pragma: no cover
     ap = argparse.ArgumentParser(description="ShadowShield control dashboard")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--mode", default="balanced", choices=["strict", "balanced", "permissive"])
+    ap.add_argument(
+        "--mode", default="balanced", choices=["strict", "balanced", "permissive", "shadow"]
+    )
     ap.add_argument("--api-key", action="append", default=None, help="accepted key (repeatable)")
     ap.add_argument(
         "--admin-key",

@@ -32,12 +32,17 @@ class Mode(str, enum.Enum):
       enables every detector including the optional LLM self-check hook.
     - ``BALANCED``: the sensible default. Sanitizes medium threats, blocks high+.
     - ``PERMISSIVE``: observability-first. Flags and logs, rarely blocks —
-      useful for shadow-mode rollout where you measure before you enforce.
+      but critical-severity payloads and very high aggregate scores still
+      block by design.
+    - ``SHADOW``: pure observation. Never blocks, never sanitizes — every
+      verdict is flagged and logged while traffic flows untouched. The
+      rollout/canary posture: measure exactly what enforcement *would* do.
     """
 
     STRICT = "strict"
     BALANCED = "balanced"
     PERMISSIVE = "permissive"
+    SHADOW = "shadow"
 
 
 class PolicyConfig(BaseModel):
@@ -136,6 +141,7 @@ class ShieldConfig(BaseModel):
 
     # Aggregate score at/above which the payload is considered "not safe" even
     # if no single detector hit CRITICAL. Lower = more cautious.
+    # 1.0 disables the floor entirely (used by shadow mode).
     block_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
 
     # Hard cap on how many characters are scanned per payload. Oversized inputs
@@ -250,8 +256,27 @@ def _permissive() -> ShieldConfig:
     )
 
 
+def _shadow() -> ShieldConfig:
+    """Pure observation: flag and log everything, mutate nothing."""
+    return ShieldConfig(
+        mode=Mode.SHADOW,
+        block_threshold=1.0,  # floor disabled — shadow never blocks
+        policy=PolicyConfig(
+            none=Decision.ALLOW,
+            low=Decision.FLAG,
+            medium=Decision.FLAG,
+            high=Decision.FLAG,
+            critical=Decision.FLAG,
+        ),
+        llm_check=LLMCheckConfig(enabled=False),
+        rate_limit=RateLimitConfig(enabled=False),
+        logging=LoggingConfig(enabled=True, redact_payloads=True, level="INFO"),
+    )
+
+
 _MODE_PRESETS = {
     Mode.STRICT: _strict,
     Mode.BALANCED: _balanced,
     Mode.PERMISSIVE: _permissive,
+    Mode.SHADOW: _shadow,
 }

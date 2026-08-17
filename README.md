@@ -470,7 +470,8 @@ shield = ss.Shield.from_yaml("shield.yaml")
 |---|---|---|
 | `strict` | security-first | sanitizes LOW, **blocks MEDIUM+**, LLM check on, rate limiting on |
 | `balanced` *(default)* | pragmatic | flags LOW, sanitizes MEDIUM, blocks HIGH+ |
-| `permissive` | observability-first | mostly flags/logs — ideal for **shadow-mode rollout** before enforcing |
+| `permissive` | observability-first | mostly flags/logs — but CRITICAL payloads and very high scores still block by design |
+| `shadow` | pure observation | **never blocks, never sanitizes** — every verdict flagged/logged, traffic untouched; the true measure-before-enforcing rollout posture |
 
 Every knob (per-detector toggles & weights, policy mapping, LLM-check gating,
 rate limits, audit redaction) is documented in

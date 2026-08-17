@@ -190,6 +190,31 @@ class TestNonStreaming:
         assert flagged, f"expected a shadow flag in {logs!r}"
         assert flagged[0]["decision"] in {"flag", "sanitize", "block", "escalate"}
 
+    async def test_shadow_mode_never_blocks_even_critical(self) -> None:
+        """Shadow mode is pure observation: even a critical payload flows."""
+        from structlog.testing import capture_logs
+
+        upstream = MockUpstream()
+        shield = ss.Shield.for_mode("shadow")
+        app = create_proxy_app(shield, "http://upstream.test", transport=upstream.transport)
+        with capture_logs() as logs:
+            async with _client(app) as client:
+                resp = await client.post("/v1/chat/completions", json=_chat(MALICIOUS_INPUT))
+        assert resp.status_code == 200  # shadow: forwarded untouched
+        assert len(upstream.calls) == 1
+        flagged = [e for e in logs if e.get("event") == "shadowshield.proxy.request_flagged"]
+        assert flagged, f"expected a shadow flag in {logs!r}"
+
+    async def test_shadow_mode_forwards_secret_output(self) -> None:
+        """Output-side too: a leaked secret is logged, not cut, in shadow."""
+        upstream = MockUpstream(reply=SECRET)
+        shield = ss.Shield.for_mode("shadow")
+        app = create_proxy_app(shield, "http://upstream.test", transport=upstream.transport)
+        async with _client(app) as client:
+            resp = await client.post("/v1/chat/completions", json=_chat("say the secret"))
+        assert resp.status_code == 200
+        assert SECRET in resp.text
+
 
 class TestStreaming:
     async def test_clean_stream_forwarded_complete(self) -> None:
