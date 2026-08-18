@@ -1,5 +1,5 @@
 # Release/build tooling. Regenerate build.lock with the command in its header.
 pip==26.2.1
 build==1.5.0
-hatchling==1.31.0
+hatchling==1.32.0
 twine==7.0.0
