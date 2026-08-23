@@ -16,9 +16,23 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Grouped like pip above: one combined PR per week instead of one per
+    # bump. Each ungrouped PR triggers a full CI run, and CI is billed per
+    # job rounded up to the minute.
+    groups:
+      docker-images:
+        patterns:
+          - "*"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
+    # Grouped like pip above: one combined PR per week instead of one per
+    # bump. Each ungrouped PR triggers a full CI run, and CI is billed per
+    # job rounded up to the minute.
+    groups:
+      github-actions:
+        patterns:
+          - "*"
