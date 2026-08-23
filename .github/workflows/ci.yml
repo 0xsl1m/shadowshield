@@ -1,10 +1,25 @@
 name: CI
 
+# Documentation-only changes skip CI: nothing under tests/ or scripts/ reads
+# docs/ or any markdown file, and site/ is published by its own pages workflow.
+# A commit touching docs AND source still runs, because paths-ignore only skips
+# when every changed file matches. The secret scan deliberately does NOT skip
+# these paths -- a credential can land in a markdown file just as easily.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "site/**"
+      - "LICENSE"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "site/**"
+      - "LICENSE"
 
 concurrency:
   group: ci-${{ github.ref }}
