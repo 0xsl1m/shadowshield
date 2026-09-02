@@ -1,13 +1,13 @@
 # Changelog
 
+All notable changes to ShadowShield are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
+to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
 
 ### Added
 - Proxy `GET /health` now reports `requests_total` and `last_request_at` (authenticated proxied requests only), so a deployment can prove it is carrying traffic and not only answering liveness checks.
-
-All notable changes to ShadowShield are documented here. The format is based on
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
-to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.9.0] - 2026-08-17
 
