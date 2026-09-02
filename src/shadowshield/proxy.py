@@ -16,6 +16,13 @@ output guardrails with a one-line base-URL change — no SDK integration at all:
   terminated with an OpenAI-conventional ``finish_reason="content_filter"``
   chunk followed by ``data: [DONE]``.
 
+``GET /health`` reports ``status`` plus lightweight request accounting:
+``requests_total`` (requests accepted on a proxied route since start-up,
+including ones blocked by policy) and ``last_request_at`` (ISO-8601 UTC
+timestamp of the most recent one, ``null`` until the first request). Health
+probes themselves are not counted, so operators can tell a healthy-but-idle
+proxy from one that is actually carrying traffic.
+
 Auth, body limits, concurrency caps, and security headers reuse the shared
 :mod:`shadowshield._security` middleware. When proxy auth keys are configured
 (``--api-key`` / ``SHADOWSHIELD_API_KEY``) clients authenticate with
@@ -39,6 +46,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -291,6 +299,15 @@ def create_proxy_app(
     keys = resolve_api_keys(api_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
 
+    # Request accounting surfaced by /health. Only routes that actually proxy
+    # traffic count (chat, completions, passthrough); /health itself does not.
+    # Mutated only from coroutines on the event loop, so no lock is needed.
+    stats: dict[str, Any] = {"requests_total": 0, "last_request_at": None}
+
+    def _count_request() -> None:
+        stats["requests_total"] += 1
+        stats["last_request_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
     @asynccontextmanager
     async def lifespan(_app: Any) -> AsyncIterator[None]:
         async with client:
@@ -305,8 +322,12 @@ def create_proxy_app(
     app.add_middleware(SecurityHeadersMiddleware)
 
     @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "requests_total": stats["requests_total"],
+            "last_request_at": stats["last_request_at"],
+        }
 
     async def _safe_scan(text: str, direction: Direction, identity: str | None) -> Any | None:
         """Scan with fail-open semantics: a detector exception must never 500
@@ -464,6 +485,7 @@ def create_proxy_app(
         )
 
     async def _handle_chat(request: Request, path: str) -> Any:
+        _count_request()
         body = await request.body()
         identity = _identity_for(request)
         target = upstream + path
@@ -499,6 +521,7 @@ def create_proxy_app(
         # upstream's path space.
         if not _is_safe_upstream_path(full_path):
             return Response(status_code=400, content=b'{"error":{"message":"invalid path"}}')
+        _count_request()
         target = upstream + "/" + full_path
         if request.url.query:
             target += "?" + request.url.query

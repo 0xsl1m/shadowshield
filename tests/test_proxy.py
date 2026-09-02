@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -280,7 +281,10 @@ class TestAuthAndPassthrough:
         async with _client(_app(upstream, api_keys=["proxy-key"])) as client:
             resp = await client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["requests_total"] == 0
+        assert body["last_request_at"] is None
 
     async def test_passthrough_forwards_non_chat_routes(self) -> None:
         upstream = MockUpstream()
@@ -288,6 +292,53 @@ class TestAuthAndPassthrough:
             resp = await client.get("/v1/models")
         assert resp.status_code == 200
         assert resp.json()["object"] == "list"
+
+    async def test_health_counts_proxied_requests(self) -> None:
+        upstream = MockUpstream()
+        async with _client(_app(upstream)) as client:
+            before = (await client.get("/health")).json()
+            assert before == {
+                "status": "ok",
+                "requests_total": 0,
+                "last_request_at": None,
+            }
+
+            # Clean chat completion: forwarded and counted.
+            await client.post("/v1/chat/completions", json=_chat("how do I bake bread?"))
+            after_one = (await client.get("/health")).json()
+            assert after_one["requests_total"] == 1
+            stamp = after_one["last_request_at"]
+            assert isinstance(stamp, str)
+            parsed = datetime.fromisoformat(stamp)
+            assert parsed.tzinfo is not None
+            assert parsed.utcoffset() == timedelta(0)
+
+            # Blocked by policy: never reached upstream, still a proxied request.
+            blocked = await client.post("/v1/chat/completions", json=_chat(MALICIOUS_INPUT))
+            assert blocked.status_code == 403
+            # Legacy completions and passthrough routes count too.
+            await client.post("/v1/completions", json={"model": "mock", "prompt": "hi"})
+            await client.get("/v1/models")
+            # Health probes and rejected passthrough paths are not proxied
+            # (%5C decodes to a backslash, which _is_safe_upstream_path rejects).
+            bad = await client.get("/v1/models%5C")
+            assert bad.status_code == 400
+            final = (await client.get("/health")).json()
+        assert len(upstream.calls) == 3
+        assert final["requests_total"] == 4
+        assert datetime.fromisoformat(final["last_request_at"]) >= parsed
+
+    async def test_health_counter_ignores_unauthenticated_requests(self) -> None:
+        upstream = MockUpstream()
+        async with _client(_app(upstream, api_keys=["proxy-key"])) as client:
+            denied = await client.post("/v1/chat/completions", json=_chat("hi"))
+            assert denied.status_code == 401
+            assert (await client.get("/health")).json()["requests_total"] == 0
+            allowed = await client.post(
+                "/v1/chat/completions", json=_chat("hi"), headers={"X-API-Key": "proxy-key"}
+            )
+            assert allowed.status_code == 200
+            assert (await client.get("/health")).json()["requests_total"] == 1
 
     async def test_proxy_key_never_forwarded_upstream(self) -> None:
         upstream = MockUpstream()
