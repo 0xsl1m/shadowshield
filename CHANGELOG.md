@@ -8,6 +8,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Proxy `GET /health` now reports `requests_total` and `last_request_at` (authenticated proxied requests only), so a deployment can prove it is carrying traffic and not only answering liveness checks.
+- Request, response, and SSE text/tool-payload scanning for Anthropic
+  `/v1/messages` and OpenAI `/v1/responses` with protocol-native failure events.
+- An explicit-only proxy authentication option prevents ambient credentials
+  from remaining accepted alongside a dedicated deployment key.
+
+### Fixed
+- Enforce the shadow boundary after size, detector-error, and rate-limit decisions:
+  observation preserves the original payload and never invokes sanitizing responders.
+- Use `/health` for the container health check so both proxy and control-server
+  deployments report liveness correctly.
+- Enforcing proxy modes reject incomplete bounded extraction and scanner
+  failures rather than forwarding uninspected traffic. Shadow remains
+  observation-only and preserves the original HTTP payloads.
 
 ## [0.9.0] - 2026-08-17
 
