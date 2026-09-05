@@ -72,6 +72,10 @@ does not cover image/audio bytes, provider-side stored context, or remote tool
 execution performed inside the provider. A configured route or a health counter
 is not proof of complete agent/tool coverage.
 
+SSE inspection applies to the supported protocol event schemas. Unknown event
+types and malformed event data are forwarded without text inspection; custom
+provider event formats need separate coverage qualification.
+
 `shadow` preserves request and response payloads, including SSE event framing.
 It bounds inspection work without turning findings into blocks or sanitized
 content. HTTP authentication, request-body size, and concurrency limits still
