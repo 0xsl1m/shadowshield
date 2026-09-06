@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -154,10 +155,31 @@ class TestNonStreaming:
         assert resp.status_code == 200
         assert SECRET in resp.text
 
-    async def test_scanner_exception_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A detector bug must never 500 the caller's LLM request."""
+    async def test_scanner_exception_returns_503_in_enforcing_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Enforcing modes fail closed: a scanner bug yields a native 503,
+        never a 500 and never silently uninspected traffic."""
         upstream = MockUpstream()
         shield = ss.Shield.for_mode("balanced")
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("detector exploded")
+
+        monkeypatch.setattr(shield, "scan", _boom)
+        app = create_proxy_app(shield, "http://upstream.test", transport=upstream.transport)
+        async with _client(app) as client:
+            resp = await client.post("/v1/chat/completions", json=_chat(MALICIOUS_INPUT))
+        assert resp.status_code == 503
+        assert resp.json()["error"]["code"] == "shadowshield_scan_unavailable"
+
+    async def test_scanner_exception_still_observes_in_shadow_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Shadow is a payload-preserving observation lane: even a scanner bug
+        must not rewrite or block traffic."""
+        upstream = MockUpstream()
+        shield = ss.Shield.for_mode("shadow")
 
         def _boom(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("detector exploded")
@@ -280,7 +302,11 @@ class TestAuthAndPassthrough:
         async with _client(_app(upstream, api_keys=["proxy-key"])) as client:
             resp = await client.get("/health")
         assert resp.status_code == 200
-        assert resp.json() == {"status": "ok"}
+        assert resp.json() == {
+            "status": "ok",
+            "requests_total": 0,
+            "last_request_at": None,
+        }
 
     async def test_passthrough_forwards_non_chat_routes(self) -> None:
         upstream = MockUpstream()
@@ -315,3 +341,134 @@ class TestFactoryValidation:
     def test_rejects_non_positive_timeout(self) -> None:
         with pytest.raises(ValueError, match="timeout"):
             create_proxy_app(ss.Shield.for_mode("balanced"), "http://x", timeout_seconds=0)
+
+
+class TestHealthAccounting:
+    async def test_health_reports_idle_proxy(self) -> None:
+        upstream = MockUpstream()
+        async with _client(_app(upstream)) as client:
+            resp = await client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["requests_total"] == 0
+        assert resp.json()["last_request_at"] is None
+
+    async def test_proxied_requests_increment_requests_total(self) -> None:
+        upstream = MockUpstream()
+        async with _client(_app(upstream)) as client:
+            await client.post("/v1/chat/completions", json=_chat("hi"))
+            await client.post("/v1/chat/completions", json=_chat("hi again"))
+            resp = await client.get("/health")
+        body = resp.json()
+        assert body["requests_total"] == 2
+        # ISO-8601 UTC timestamp of the most recent proxied request.
+        stamp = datetime.fromisoformat(body["last_request_at"])
+        assert stamp.tzinfo is not None
+
+    async def test_blocked_requests_are_counted(self) -> None:
+        """requests_total covers every accepted proxied request, blocked or not."""
+        upstream = MockUpstream()
+        async with _client(_app(upstream)) as client:
+            blocked = await client.post("/v1/chat/completions", json=_chat(MALICIOUS_INPUT))
+            resp = await client.get("/health")
+        assert blocked.status_code == 403
+        assert resp.json()["requests_total"] == 1
+
+    async def test_health_probes_do_not_increment_requests_total(self) -> None:
+        upstream = MockUpstream()
+        async with _client(_app(upstream)) as client:
+            await client.get("/health")
+            await client.get("/health")
+            resp = await client.get("/health")
+        assert resp.json()["requests_total"] == 0
+        assert resp.json()["last_request_at"] is None
+
+
+class TestInspectionSizeCaps:
+    @staticmethod
+    def _big_json_upstream(size: int) -> MockUpstream:
+        upstream = MockUpstream()
+        big = {
+            "id": "chatcmpl-big",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "mock",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "x" * size},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        def _handle(request: httpx.Request) -> httpx.Response:
+            upstream.calls.append(request)
+            return httpx.Response(200, json=big)
+
+        upstream.transport = httpx.MockTransport(_handle)
+        return upstream
+
+    async def test_oversized_json_response_blocked_in_enforcing_mode(self) -> None:
+        """A >1 MiB inspectable JSON body cannot exhaust the scan buffer:
+        enforcing modes reject it with the protocol-native error."""
+        upstream = self._big_json_upstream(1_100_000)
+        async with _client(_app(upstream)) as client:
+            resp = await client.post("/v1/chat/completions", json=_chat("hi"))
+        assert resp.status_code == 403
+        assert resp.json()["error"]["code"] == "shadowshield_blocked"
+
+    async def test_oversized_json_response_passes_in_shadow_mode(self) -> None:
+        """Shadow scans the bounded prefix and preserves the full payload."""
+        upstream = self._big_json_upstream(1_100_000)
+        shield = ss.Shield.for_mode("shadow")
+        app = create_proxy_app(shield, "http://upstream.test", transport=upstream.transport)
+        async with _client(app) as client:
+            resp = await client.post("/v1/chat/completions", json=_chat("hi"))
+        assert resp.status_code == 200
+        assert len(resp.json()["choices"][0]["message"]["content"]) == 1_100_000
+
+    async def test_oversized_sse_event_terminated_in_enforcing_mode(self) -> None:
+        """A single SSE event over 256 KiB ends the stream with the OpenAI
+        content-filter tail; the oversized event never reaches the caller."""
+        oversized = "data: " + json.dumps(_chunk("y" * 300_000)) + "\n\n"
+        upstream = MockUpstream()
+
+        def _handle(request: httpx.Request) -> httpx.Response:
+            upstream.calls.append(request)
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text=oversized
+            )
+
+        upstream.transport = httpx.MockTransport(_handle)
+        async with (
+            _client(_app(upstream)) as client,
+            client.stream("POST", "/v1/chat/completions", json=_chat("hi", stream=True)) as resp,
+        ):
+            assert resp.status_code == 200
+            body = (await resp.aread()).decode()
+        assert '"finish_reason":"content_filter"' in body or (
+            '"finish_reason": "content_filter"' in body
+        )
+        assert "data: [DONE]" in body
+        assert "y" * 300_000 not in body
+
+    async def test_oversized_sse_event_passes_in_shadow_mode(self) -> None:
+        oversized = "data: " + json.dumps(_chunk("y" * 300_000)) + "\n\ndata: [DONE]\n\n"
+        upstream = MockUpstream()
+
+        def _handle(request: httpx.Request) -> httpx.Response:
+            upstream.calls.append(request)
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, text=oversized
+            )
+
+        upstream.transport = httpx.MockTransport(_handle)
+        shield = ss.Shield.for_mode("shadow")
+        app = create_proxy_app(shield, "http://upstream.test", transport=upstream.transport)
+        async with (
+            _client(app) as client,
+            client.stream("POST", "/v1/chat/completions", json=_chat("hi", stream=True)) as resp,
+        ):
+            assert resp.status_code == 200
+            body = (await resp.aread()).decode()
+        assert "y" * 300_000 in body

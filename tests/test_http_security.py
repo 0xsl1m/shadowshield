@@ -6,11 +6,14 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import pytest
+
 from shadowshield._security import (
     MAX_HTTP_BODY_BYTES,
     ConcurrencyLimitMiddleware,
     EarlyAuthMiddleware,
     RequestBodyLimitMiddleware,
+    resolve_api_keys,
 )
 
 
@@ -324,3 +327,40 @@ def test_scan_capacity_rejects_without_blocking_health() -> None:
         assert 200 in statuses
 
     asyncio.run(scenario())
+
+
+def test_resolve_api_keys_isolated_ignores_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "ambient-key")
+    assert resolve_api_keys(["explicit-key"], include_environment=False) == ["explicit-key"]
+
+
+def test_resolve_api_keys_isolated_returns_only_explicit_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "ambient-1, ambient-2")
+    resolved = resolve_api_keys(["explicit-1", "explicit-2"], include_environment=False)
+    assert resolved == ["explicit-1", "explicit-2"]
+    assert "ambient-1" not in resolved
+    assert "ambient-2" not in resolved
+
+
+def test_resolve_api_keys_isolated_requires_nonempty_key_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Isolated auth must fail closed: a missing secret never disables auth."""
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "ambient-key")
+    with pytest.raises(ValueError, match="isolated authentication requires an explicit API key"):
+        resolve_api_keys(None, include_environment=False)
+    with pytest.raises(ValueError, match="isolated authentication requires an explicit API key"):
+        resolve_api_keys([], include_environment=False)
+
+
+def test_resolve_api_keys_default_merges_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """include_environment=True (the default) keeps the ambient key merged."""
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "ambient-key, explicit-key")
+    assert resolve_api_keys(["explicit-key"]) == ["explicit-key", "ambient-key"]
+    assert resolve_api_keys(None) == ["ambient-key", "explicit-key"]

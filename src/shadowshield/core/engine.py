@@ -27,7 +27,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..core.config import ShieldConfig
+from ..core.config import Mode, ShieldConfig
 from ..core.types import (
     Decision,
     Direction,
@@ -206,10 +206,10 @@ class Engine:
         decision = self._decide(score, severity)
         if context.detector_errors and self._config.fail_closed_on_detector_error:
             decision = _stronger(decision, Decision.BLOCK)
-        # No unscanned suffix may ever flow downstream. The result preserves the
-        # original for caller inspection, but oversized payloads always receive
-        # the blocker's safe fallback in every mode and policy configuration.
-        if oversized:
+        # No unscanned suffix may flow downstream in an enforcing mode. Shadow
+        # mode is explicitly different: it is a payload-preserving observation
+        # lane, so the bounded prefix scan is recorded but never changes traffic.
+        if oversized and self._config.mode is not Mode.SHADOW:
             decision = _stronger(decision, Decision.BLOCK)
 
         result = ScanResult(
@@ -245,7 +245,17 @@ class Engine:
             result.metadata["findings_truncated"] = truncated_findings
             result.metadata["findings_total"] = len(result.threats) + truncated_findings
 
-        result = self._apply_responders(result, context)
+        if self._config.mode is Mode.SHADOW:
+            # The mode boundary is deliberately enforced here, after every
+            # possible escalation (detector failure, size guard, rate limiter),
+            # rather than relying on a preset that callers could override.
+            # Preserve the exact original payload and emit only redacted audit
+            # metadata through the normal recorder below.
+            result.decision = Decision.FLAG if result.threats else Decision.ALLOW
+            result.sanitized_text = None
+            result.metadata["shadow_observation"] = True
+        else:
+            result = self._apply_responders(result, context)
         self._record(result, context)
         self._notify_observers(result, (time.perf_counter() - start) * 1000.0, identity)
         return result

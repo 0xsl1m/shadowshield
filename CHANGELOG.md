@@ -4,6 +4,62 @@ All notable changes to ShadowShield are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-05
+
+### Security
+
+- **Engine-enforced shadow mode**: the shadow boundary is now enforced in the
+  engine itself, after every possible escalation (detector-failure fail-closed,
+  input size guard, rate limiter) — not by a preset callers could override.
+  Shadow results are always `FLAG` when threats exist (otherwise `ALLOW`),
+  carry `sanitized_text = None` (the original payload is preserved verbatim),
+  and are marked `metadata["shadow_observation"] = True`. Oversized payloads
+  in shadow mode are scanned as a bounded prefix and passed through; enforcing
+  modes still force `BLOCK` on oversize.
+- **Isolated API-key resolution**: `resolve_api_keys(...,
+  include_environment=False)` excludes the ambient `SHADOWSHIELD_API_KEY`
+  variable so a stale ambient credential cannot remain valid next to a
+  dedicated explicit key. The isolated set must be non-empty — a missing
+  secret raises `ValueError` instead of silently disabling auth. Exposed on
+  the proxy as `create_proxy_app(..., include_environment_keys=False)`.
+- **Fail-closed inspection bounds in the proxy**: request or response content
+  that exceeds the structured-extraction budget (`_MAX_TEXTS_SCANNED` texts,
+  `_MAX_MESSAGES_SCANNED` messages, `_MAX_CHOICES_SCANNED` choices, bounded
+  nesting depth) is rejected with a protocol-native error in enforcing modes
+  instead of being partially scanned. Unparseable JSON bodies and
+  scan-unavailable conditions (scanner exception or detector failure) now
+  return 503 in enforcing modes rather than failing open. Shadow mode keeps
+  its observation contract: uninspectable traffic is forwarded and logged,
+  never rewritten.
+
+### Added
+
+- **Anthropic and OpenAI Responses API protocol support in the proxy**: new
+  guarded routes `/v1/messages` and `/v1/responses` (with trailing-slash
+  aliases) alongside `/v1/chat/completions` and `/v1/completions`, including
+  protocol-native text extraction (system prompts, `tool_use`/`tool_result`
+  blocks, function/tool-call arguments, Responses items and stream events),
+  native error bodies, and native stream-failure tails (Anthropic `error`
+  events, `response.failed`, OpenAI `content_filter` chunks).
+- **Proxy health accounting**: `GET /health` now reports `requests_total`
+  (proxied requests since start-up, including policy-blocked ones) and
+  `last_request_at` (ISO-8601 UTC, `null` until the first request). Health
+  probes themselves are not counted, so operators can distinguish a healthy
+  idle proxy from one actually carrying traffic.
+- **Inspection size caps**: successful JSON response bodies larger than 1 MiB
+  (`_MAX_INSPECTABLE_BODY_BYTES`) and individual SSE events larger than 256
+  KiB (`_MAX_SSE_EVENT_BYTES`) no longer grow an unbounded inspection buffer —
+  enforcing modes reject/terminate with the protocol-native failure tail,
+  while shadow mode scans the bounded prefix and passes traffic through.
+
+### Fixed
+
+- Non-SSE responses to `stream: true` requests are rendered through the
+  non-streaming inspection path instead of being forwarded verbatim.
+- Scan-error logs no longer risk embedding exception text or inspected
+  content: scanner failures log only the error type, and detector-failure
+  results are counted and surfaced via `shadowshield.proxy.scan_error`.
+
 ## [0.9.0] - 2026-08-17
 
 ### Added
