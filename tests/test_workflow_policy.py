@@ -89,6 +89,11 @@ def test_release_builds_install_hash_locked_dependencies() -> None:
     assert "requirements/build.lock" in dockerfile
     assert "requirements/container.lock" in dockerfile
     assert "--no-deps /tmp/*.whl" in dockerfile
+    # /health exists in both the default control server and proxy mode. /ready
+    # is control-server-only and makes an otherwise healthy proxy image report
+    # unhealthy when operators override CMD with ``shadowshield proxy``.
+    assert "urlopen('http://127.0.0.1:8000/health'" in dockerfile
+    assert "urlopen('http://127.0.0.1:8000/ready'" not in dockerfile
 
     for workflow_name in ("ci.yml", "publish.yml"):
         workflow = (_WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")

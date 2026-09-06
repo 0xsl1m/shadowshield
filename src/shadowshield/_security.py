@@ -52,11 +52,22 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def resolve_api_keys(explicit: list[str] | None = None) -> list[str]:
-    """Accepted API keys: explicit args + ``SHADOWSHIELD_API_KEY`` (de-duplicated)."""
+def resolve_api_keys(
+    explicit: list[str] | None = None, *, include_environment: bool = True
+) -> list[str]:
+    """Resolve accepted keys, optionally excluding ambient credentials entirely.
+
+    Isolated deployments can set ``include_environment=False`` to prevent an old
+    ambient key from remaining valid alongside a dedicated explicit credential.
+    An isolated key set must be nonempty; a missing secret must not disable auth.
+    """
     keys = list(explicit or [])
-    keys += _split_csv(os.environ.get("SHADOWSHIELD_API_KEY"))
-    return _dedupe(keys)
+    if include_environment:
+        keys += _split_csv(os.environ.get("SHADOWSHIELD_API_KEY"))
+    resolved = _dedupe(keys)
+    if not include_environment and not resolved:
+        raise ValueError("isolated authentication requires an explicit API key")
+    return resolved
 
 
 def resolve_admin_keys(explicit: list[str] | None = None) -> list[str]:

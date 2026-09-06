@@ -251,21 +251,42 @@ Endpoints: `GET /health` (liveness), `GET /ready` (readiness), `POST /scan`,
 
 ### 10. Gateway mode — guardrails without code changes
 
-Put ShadowShield *in front of* any OpenAI-compatible endpoint and point your
-existing SDK at the proxy instead. Chat messages are scanned pre-flight (a
-blocked request returns an OpenAI-style `403` and never reaches the upstream),
-completions are scanned post-flight, and malicious **SSE streams are cut
-mid-flight** with a conventional `finish_reason="content_filter"` chunk:
+Put ShadowShield in front of your provider and point the SDK at the proxy.
+These POST routes scan request text before forwarding, response text before
+returning a non-streaming response, and text/tool payloads in SSE streams:
+
+| Protocol | Scanned routes | Stream failure format |
+| --- | --- | --- |
+| OpenAI Chat Completions | `/v1/chat/completions`, `/v1/completions` | `content_filter` termination or an error event |
+| Anthropic Messages | `/v1/messages` | Anthropic `error` event |
+| OpenAI Responses | `/v1/responses` | Responses failure event |
+
+Blocked inputs return `403` without contacting the provider. In enforcing modes,
+unavailable scans return `503` or a protocol-native stream error. Stream scanning
+can stop future events; it cannot retract text already delivered. Other routes
+(including stored-response retrieval), image/audio content, and provider-side
+context are outside this proxy's text-scanning coverage.
 
 ```bash
 pip install "shadowshield[dashboard]"
-shadowshield proxy --upstream https://api.openai.com --port 8100 \
-  --api-key "$GATEWAY_KEY"        # proxy auth; upstream key stays in Authorization
+export SHADOWSHIELD_API_KEY="$GATEWAY_KEY" # load from your secret manager
+shadowshield proxy --upstream https://api.openai.com --port 8100 --mode shadow
 ```
 
 ```python
-client = OpenAI(base_url="http://localhost:8100/v1", api_key=os.environ["OPENAI_API_KEY"])
+client = OpenAI(
+    base_url="http://localhost:8100/v1",
+    api_key=os.environ["OPENAI_API_KEY"],
+    default_headers={"X-API-Key": os.environ["SHADOWSHIELD_API_KEY"]},
+)
 ```
+
+`GET /health` reports `requests_total` and `last_request_at`; those include
+passthrough requests and do not prove that every request was scanned. Start with
+`shadow`, which preserves payloads while reporting findings. Measure false blocks
+on representative coding and security-analysis content before changing modes.
+The scanner does not infer trusted content from quotes, role names, or file paths.
+See [proxy policy and limits](docs/configuration.md#proxy-policy-and-limits).
 
 The same protection embeds in-process via `ShieldASGIMiddleware`
 (`shadowshield.middleware.asgi`) for any ASGI app — SSE passes through there,

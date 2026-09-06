@@ -6,12 +6,36 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import pytest
+
 from shadowshield._security import (
     MAX_HTTP_BODY_BYTES,
     ConcurrencyLimitMiddleware,
     EarlyAuthMiddleware,
     RequestBodyLimitMiddleware,
+    resolve_api_keys,
 )
+
+
+def test_isolated_api_keys_exclude_ambient_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "synthetic-retired-key")
+    assert resolve_api_keys(["synthetic-dedicated-key"], include_environment=False) == [
+        "synthetic-dedicated-key"
+    ]
+    # Existing callers retain the documented overlap behavior.
+    assert resolve_api_keys(["synthetic-dedicated-key"]) == [
+        "synthetic-dedicated-key",
+        "synthetic-retired-key",
+    ]
+
+
+@pytest.mark.parametrize("explicit", [None, [], [""]])
+def test_isolated_auth_missing_key_never_disables_auth(
+    monkeypatch: pytest.MonkeyPatch, explicit: list[str] | None
+) -> None:
+    monkeypatch.setenv("SHADOWSHIELD_API_KEY", "synthetic-retired-key")
+    with pytest.raises(ValueError, match="isolated authentication requires an explicit API key"):
+        resolve_api_keys(explicit, include_environment=False)
 
 
 def test_chunked_body_limit_rejects_before_inner_response() -> None:
