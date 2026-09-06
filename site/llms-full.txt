@@ -4,7 +4,7 @@
 > multi-agent AI systems, with a strong emphasis on prompt-injection defense
 > (OWASP LLM01). MIT licensed. `pip install shadowshield`.
 > Site: https://shadowshield.xyz/ · Repo: https://github.com/0xsl1m/shadowshield
-> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.9.0
+> PyPI: https://pypi.org/project/shadowshield/ · Version: 0.10.0
 
 This file is a flattened synthesis of the project's primary documentation,
 provided for LLM ingestion. Content below is derived from and includes excerpts from the
