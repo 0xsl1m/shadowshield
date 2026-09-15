@@ -1,0 +1,28 @@
+# gitleaks configuration for the ShadowShield repository.
+#
+# Extends the built-in gitleaks rule set unchanged; the only addition is a
+# narrowly scoped allowlist for the placeholder credentials used by the CI
+# container smoke test in .github/workflows/ci.yml.
+#
+# Why: the scheduled "Security scan" workflow has been red on main since
+# 2026-08-24. gitleaks rule `curl-auth-header` matches the smoke test's
+# `curl ... -H 'x-api-key: ci-api-key'` lines (entropy 2.92, findings at
+# ci.yml lines 160 and 172 of commit 6e541d33) and reports the health-check
+# curl line as the finding. `ci-api-key` and its siblings are compile-time
+# dummies that only ever exist inside the ephemeral CI container.
+#
+# Scope: the allowlist requires BOTH conditions (path AND secret pattern), so
+# a real key pasted into ci.yml, or a `ci-*-key` string anywhere else, still
+# trips the scan.
+
+title = "ShadowShield gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "CI container smoke-test placeholder credentials (.github/workflows/ci.yml)"
+condition = "AND"
+paths = ['''^\.github/workflows/ci\.yml$''']
+regexTarget = "secret"
+regexes = ['''^ci-(?:api|admin|policy|policy-state)-key(?:-0123456789abcdef)?$''']

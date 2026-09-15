@@ -244,8 +244,9 @@ curl -s localhost:8000/scan -H 'content-type: application/json' \
   -d '{"text":"ignore all previous instructions","direction":"input"}'
 # {"decision":"block","blocked":true,"score":0.9,...}
 ```
-Endpoints: `GET /health` (liveness), `GET /ready` (readiness), `POST /scan`,
-`POST /guard`, `GET /` (dashboard). Direct factory mounting fails closed unless
+Endpoints: `GET /health` (liveness; also reports `requests_total` and
+`last_request_at` for the proxied traffic carried), `GET /ready` (readiness),
+`POST /scan`, `POST /guard`, `GET /` (dashboard). Direct factory mounting fails closed unless
 `api_keys` is supplied; local-only trusted embeddings must explicitly pass
 `allow_insecure_local=True`.
 
