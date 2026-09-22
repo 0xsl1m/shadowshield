@@ -6,6 +6,7 @@ import importlib.util
 import json
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,6 +76,29 @@ def test_valid_coverage_is_bound_to_exact_bytes(tmp_path: Path) -> None:
     path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
     second = qualifier.validate_coverage(path)
     assert second["valid"] and first["sha256"] != second["sha256"]
+
+
+def test_runner_collects_receipts_once_without_other_properties_or_parameter_values() -> None:
+    results = qualifier.Results()
+    record = _rows()[0]
+    for phase in ("setup", "call", "teardown"):
+        results.pytest_runtest_logreport(
+            SimpleNamespace(
+                when=phase,
+                failed=False,
+                skipped=False,
+                nodeid="tests/test_protocol_coverage.py::test_boundary[private-input]",
+                outcome="passed",
+                duration=0.001,
+                user_properties=[
+                    ("unrelated_property", "private-input"),
+                    ("shadowshield_coverage", record),
+                ],
+            )
+        )
+    assert results.coverage_records == [record]
+    assert len(results.cases) == 1
+    assert "private-input" not in json.dumps(results.cases + results.coverage_records)
 
 
 @pytest.mark.parametrize("method", ["connect", "connect_ex", "create_connection", "getaddrinfo"])

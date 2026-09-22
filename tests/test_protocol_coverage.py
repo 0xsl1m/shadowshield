@@ -9,9 +9,7 @@ scanner.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import AsyncIterator, Iterator
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,7 +20,11 @@ import shadowshield.proxy as proxy_module
 from shadowshield.core.types import Severity, Threat, ThreatCategory
 from shadowshield.detectors.base import Detector, ScanContext
 from shadowshield.proxy import create_proxy_app
-from shadowshield.proxy_coverage import StreamProtocolExtractor
+from shadowshield.proxy_coverage import (
+    StreamProtocolExtractor,
+    extract_request,
+    extract_response,
+)
 
 pytest.importorskip("fastapi")
 
@@ -156,10 +158,10 @@ def _receipt(
     transport: str | None = None,
     status: str | None = None,
 ) -> None:
-    """Optionally write a fixed-schema receipt with no inspected material.
+    """Attach a fixed-schema observation for the qualification runner.
 
-    The output path is deliberately opt-in so ordinary test runs do not create
-    artifacts.  Values are enumerated constants apart from pytest's static node
+    The runner owns persistence; the fixture never opens an output path.
+    Values are enumerated constants apart from pytest's static node
     id; payload bytes, provider IDs, exception text, hashes, and event labels
     are never persisted.
     """
@@ -228,13 +230,9 @@ def _receipt(
     )
     assert isinstance(observed["budget_exceeded"], bool)
     assert isinstance(observed["terminal_seen"], bool)
-    destination = os.environ.get("SHADOWSHIELD_SYNTHETIC_RECEIPTS")
-    if not destination:
-        return
     record = {"test_nodeid": request.node.nodeid.split("[", 1)[0]}
     record.update({name: observed[name] for name in expected})
-    with Path(destination).open("a", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    request.node.user_properties.append(("shadowshield_coverage", record))
 
 
 def _claude_payload(field: str) -> dict[str, Any]:
@@ -1085,3 +1083,147 @@ def test_one_character_fragment_work_is_interval_bounded_and_empty_deltas_are_in
     )
     assert empty.texts == []
     assert len(extractor._tool_buffers) == 1
+
+
+def test_anthropic_result_families_extract_inline_text_and_classify_known_gaps() -> None:
+    expected = {
+        "search title",
+        "search body",
+        "fetched source",
+        "fetched body",
+        "stdout text",
+        "stderr text",
+        "nested output",
+        "content text",
+    }
+    extraction = extract_response(
+        {
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "title": "search title",
+                    "content": "search body",
+                    "url": "https://synthetic.invalid/result",
+                    "encrypted_content": "opaque",
+                },
+                {
+                    "type": "web_fetch_result",
+                    "source": {"type": "text", "data": "fetched source"},
+                    "content": [{"type": "text", "text": "fetched body"}],
+                },
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "data": "opaque"},
+                },
+                {
+                    "type": "code_execution_result",
+                    "stdout": "stdout text",
+                    "stderr": "stderr text",
+                    "output": [{"type": "text", "text": "nested output"}],
+                    "content": "content text",
+                },
+                {"type": "bash_code_execution_result", "is_error": True},
+                {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"name": "synthetic"}, {"name": "second"}],
+                },
+                {"type": "tool_reference", "tool_name": "synthetic"},
+                {"type": "image", "source": {"type": "base64", "data": "opaque"}},
+                {"type": "web_fetch_tool_result_error", "error_code": "synthetic"},
+            ]
+        },
+        "anthropic",
+    )
+
+    assert expected <= set(extraction.texts)
+    assert extraction.reference_units >= 3
+    assert extraction.opaque_units >= 2
+    assert extraction.media_units >= 2
+    assert not extraction.complete
+    assert not extraction.enforcement_gap
+
+
+def test_responses_tool_and_media_families_extract_text_and_classify_known_gaps() -> None:
+    expected_fragments = {
+        "custom input",
+        "custom output",
+        "computer action",
+        "computer output",
+        "shell output",
+        "reasoning summary",
+        "reasoning content",
+        "interpreter code",
+        "interpreter logs",
+        "file query",
+        "file result",
+        "implicit stdout",
+        "top-level output",
+    }
+    extraction = extract_response(
+        {
+            "output": [
+                {"type": "custom_tool_call", "input": {"value": "custom input"}},
+                {"type": "custom_tool_call_output", "output": "custom output"},
+                {
+                    "type": "computer_call",
+                    "action": {"command": "computer action"},
+                    "output": {"stdout": "computer output"},
+                },
+                {"type": "shell_call_output", "output": {"stdout": "shell output"}},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "reasoning summary"}],
+                    "content": [{"type": "text", "text": "reasoning content"}],
+                    "encrypted_content": "opaque",
+                },
+                {"type": "compaction", "encrypted_content": "opaque"},
+                {"type": "computer_screenshot", "image_url": "opaque"},
+                {"type": "input_image", "image_url": "opaque"},
+                {"type": "input_file", "file_data": "opaque"},
+                {"type": "file_reference", "file_id": "synthetic"},
+                {
+                    "type": "code_interpreter_call",
+                    "code": "interpreter code",
+                    "outputs": [
+                        {"type": "logs", "logs": "interpreter logs"},
+                        {"type": "image", "url": "opaque"},
+                    ],
+                },
+                {
+                    "type": "file_search_call",
+                    "queries": ["file query"],
+                    "results": [
+                        {"text": "file result"},
+                        {"file_id": "synthetic"},
+                    ],
+                },
+                {"type": "mcp_list_tools", "tools": [{"name": "synthetic"}]},
+                {"type": "mcp_approval_request"},
+                {"stdout": "implicit stdout"},
+            ],
+            "output_text": "top-level output",
+        },
+        "responses",
+    )
+
+    joined = "\n".join(extraction.texts)
+    assert all(fragment in joined for fragment in expected_fragments)
+    assert extraction.opaque_units >= 3
+    assert extraction.media_units >= 3
+    assert extraction.reference_units >= 3
+    assert not extraction.complete
+    assert not extraction.enforcement_gap
+
+
+def test_malformed_protocol_collections_are_enforcement_gaps() -> None:
+    malformed = [
+        extract_request({"messages": "not-a-list", "tools": "not-a-list"}, "chat"),
+        extract_request({"messages": ["not-a-message"], "tools": "not-a-list"}, "anthropic"),
+        extract_request({"prompt": "not-an-object", "tools": "not-a-list"}, "responses"),
+        extract_response({"choices": "not-a-list"}, "chat"),
+        extract_response({"content": "not-a-list"}, "anthropic"),
+        extract_response({"output": "not-a-list", "output_text": 1}, "responses"),
+    ]
+
+    assert all(result.enforcement_gap for result in malformed)
+    assert all(result.malformed_units > 0 for result in malformed)

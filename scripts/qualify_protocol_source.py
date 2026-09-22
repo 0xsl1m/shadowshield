@@ -139,9 +139,14 @@ def validate_coverage(path: Path) -> dict[str, Any]:
 class Results:
     def __init__(self) -> None:
         self.cases: list[dict[str, Any]] = []
+        self.coverage_records: list[dict[str, Any]] = []
         self.failures = 0
 
     def pytest_runtest_logreport(self, report: Any) -> None:
+        if report.when == "call":
+            self.coverage_records.extend(
+                record for name, record in report.user_properties if name == "shadowshield_coverage"
+            )
         if report.when != "call" and not report.failed and not report.skipped:
             return
         # Parametrized IDs can contain test input: retain only the static name.
@@ -230,7 +235,6 @@ def main() -> int:
             ("_API_KEY", "_API_KEYS", "_TOKEN", "_SECRET")
         ):
             del os.environ[name]
-    os.environ["SHADOWSHIELD_SYNTHETIC_RECEIPTS"] = str(args.receipts.resolve())
     os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -252,6 +256,9 @@ def main() -> int:
             pytest.main(["-q", "-p", "pytest_asyncio.plugin", *TESTS], plugins=[results])
         )
     after = source_inventory()
+    with args.receipts.open("x", encoding="utf-8", newline="\n") as out:
+        for record in results.coverage_records:
+            out.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
     coverage = validate_coverage(args.receipts)
     passed = (
         exit_code == 0
