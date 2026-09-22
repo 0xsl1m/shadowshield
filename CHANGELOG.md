@@ -6,6 +6,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-22
+
+### Security
+
+- Extend Claude Messages and OpenAI Responses inspection to previously missed
+  text/tool content and streaming snapshots. A prior delta or reused item ID
+  no longer exempts later completed content from inspection.
+- Emit content-free protocol coverage receipts that distinguish complete
+  inspection from unsupported, opaque, malformed, truncated or failed scans.
+- Retain the engine-enforced shadow boundary and exact raw-body/SSE
+  preservation. This source qualification changes no live modes, credentials,
+  provider routes or gateway processes.
+
+### Tests
+
+- Restore the earlier source candidate's proxy, direct-scan and MCP shadow
+  regressions alongside the consolidated 0.10.0 tests.
+- Add synthetic protocol bypass regressions and an offline qualification
+  runner. See [protocol coverage](docs/PROTOCOL_COVERAGE.md) for scope,
+  limitations, receipt semantics and replay instructions.
+
 ## [0.10.0] - 2026-09-05
 
 ### Security

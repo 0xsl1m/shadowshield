@@ -252,11 +252,19 @@ Endpoints: `GET /health` (liveness; also reports `requests_total` and
 
 ### 10. Gateway mode — guardrails without code changes
 
-Put ShadowShield *in front of* any OpenAI-compatible endpoint and point your
-existing SDK at the proxy instead. Chat messages are scanned pre-flight (a
-blocked request returns an OpenAI-style `403` and never reaches the upstream),
-completions are scanned post-flight, and malicious **SSE streams are cut
-mid-flight** with a conventional `finish_reason="content_filter"` chunk:
+The proxy inspects requests and responses on Chat Completions, legacy
+Completions, Claude Messages (`/v1/messages`) and OpenAI Responses
+(`/v1/responses`). Supported inline text and tool content is scanned in JSON
+bodies and SSE events. In enforcing modes, blocked requests return a native
+policy error before reaching the upstream; a blocked stream ends with a
+protocol-native failure event. In shadow mode, original bodies and SSE bytes
+are preserved.
+
+Content-free coverage receipts distinguish scanned text from unsupported or
+uninspectable content and scan failures. Read the
+[coverage contract and limitations](docs/PROTOCOL_COVERAGE.md) before treating
+a successful HTTP response as inspection evidence. The 0.10.1 source release
+does not activate or reconfigure any existing gateway.
 
 ```bash
 pip install "shadowshield[dashboard]"
