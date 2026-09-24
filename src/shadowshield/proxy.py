@@ -64,6 +64,13 @@ from ._security import (
 from .core.config import Mode
 from .core.shield import Shield
 from .core.types import Decision, Direction, ScanResult
+from .proxy_coverage import (
+    CoverageReceipt,
+    Extraction,
+    StreamProtocolExtractor,
+    extract_request,
+    extract_response,
+)
 
 logger = structlog.get_logger("shadowshield.proxy")
 
@@ -125,6 +132,11 @@ def _detector_error_count(result: Any) -> int:
     return sum(
         value for value in errors.values() if isinstance(value, int) and not isinstance(value, bool)
     )
+
+
+def _input_size_guarded(result: Any) -> bool:
+    threats = getattr(result, "threats", ())
+    return any(getattr(threat, "detector", None) == "input_size_guard" for threat in threats)
 
 
 def _message_texts(payload: dict[str, Any]) -> list[str]:
@@ -515,19 +527,18 @@ def _protocol_stream_delta_text(event: dict[str, Any], protocol: str) -> str:
 def _try_json(data: str) -> dict[str, Any] | None:
     try:
         parsed = json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return None
     return parsed if isinstance(parsed, dict) else None
 
 
 def _content_filter_tail(template: dict[str, Any] | None) -> bytes:
     """OpenAI-conventional stream termination for a policy-blocked completion."""
-    template = template or {}
     chunk = {
-        "id": template.get("id", "chatcmpl-shadowshield"),
-        "object": template.get("object", "chat.completion.chunk"),
-        "created": int(template.get("created", time.time())),
-        "model": template.get("model", ""),
+        "id": "chatcmpl-shadowshield",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": "",
         "choices": [{"index": 0, "delta": {}, "finish_reason": "content_filter"}],
     }
     return f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
@@ -613,15 +624,23 @@ def _stream_failure_tail(
     # error event when an upstream omits or corrupts that opening event.
     response = first_event.get("response") if isinstance(first_event, dict) else None
     if isinstance(response, dict):
-        failed_response = dict(response)
-        failed_response.update(
-            {
-                "status": "failed",
-                "completed_at": None,
-                "error": {"code": error_code, "message": message},
-                "output": [],
-            }
-        )
+        created_at = response.get("created_at")
+        failed_response = {
+            "id": "resp_shadowshield",
+            "object": "response",
+            "created_at": created_at
+            if isinstance(created_at, int) and not isinstance(created_at, bool)
+            else int(time.time()),
+            "status": "failed",
+            "completed_at": None,
+            "error": {"code": error_code, "message": message},
+            "incomplete_details": None,
+            "instructions": None,
+            "model": "",
+            "output": [],
+            "tools": [],
+            "metadata": {},
+        }
         event = {
             "type": "response.failed",
             "response": failed_response,
@@ -689,6 +708,8 @@ def _is_stream_terminal(data: str | None, event: dict[str, Any] | None, protocol
     if event is None:
         return False
     event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return False
     if protocol == _ANTHROPIC:
         return event_type in {"message_stop", "error"}
     return event_type in {
@@ -818,19 +839,21 @@ def create_proxy_app(
             "last_request_at": stats["last_request_at"],
         }
 
-    async def _safe_scan(text: str, direction: Direction, identity: str | None) -> Any | None:
+    async def _safe_scan(
+        text: str, direction: Direction, identity: str | None
+    ) -> tuple[Any | None, str | None]:
         """Scan without allowing exception text or inspected content into logs."""
         try:
             result = await asyncio.to_thread(
                 shield.scan, text, direction=direction, identity=identity
             )
-        except Exception as exc:
+        except Exception:
             logger.error(
                 "shadowshield.proxy.scan_error",
                 direction=direction.value,
-                error_type=type(exc).__name__,
+                error_type="scanner_error",
             )
-            return None
+            return None, "scanner_error"
         detector_failures = _detector_error_count(result)
         if detector_failures:
             logger.error(
@@ -840,8 +863,9 @@ def create_proxy_app(
                 detector_failures=detector_failures,
             )
             if shield.config.mode is not Mode.SHADOW:
-                return None
-        return result
+                return None, "detector_error"
+            return result, "detector_error"
+        return result, None
 
     def _shadow_log(event: str, result: Any) -> None:
         """Emit shadow data for every non-clean, non-terminal verdict.
@@ -860,20 +884,34 @@ def create_proxy_app(
         payload: dict[str, Any], identity: str | None, protocol: str
     ) -> Any | None:
         """Return a native failure response when request inspection cannot pass."""
+        receipt = CoverageReceipt(protocol, "request", "json")
         if not scan_request:
+            receipt.mark("disabled")
+            receipt.emit(logger)
             return None
-        if not _request_extraction_complete(payload, protocol):
+        extraction = extract_request(payload, protocol)
+        receipt.record_extraction(extraction)
+        if extraction.enforcement_gap:
             logger.warning("shadowshield.proxy.request_extraction_limit")
             if shield.config.mode is not Mode.SHADOW:
+                receipt.emit(logger)
                 return JSONResponse(
                     status_code=403, content=_blocked_error(None, "request", protocol)
                 )
-        for text in _request_texts(payload, protocol):
-            result = await _safe_scan(text, Direction.INPUT, identity)
+        for text in extraction.texts:
+            max_chars = shield.config.max_input_chars
+            if max_chars and len(text) > max_chars:
+                receipt.budget_exceeded = True
+                receipt.mark("budget_exceeded")
+            result, scan_error = await _safe_scan(text, Direction.INPUT, identity)
+            if scan_error is not None:
+                receipt.mark(scan_error, scanner_error=True)
             if result is None:
                 if shield.config.mode is Mode.SHADOW:
                     continue
+                receipt.emit(logger)
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
+            receipt.record_scanned()
             if _is_terminal(result) and shield.config.mode is not Mode.SHADOW:
                 logger.warning(
                     "shadowshield.proxy.request_blocked",
@@ -881,60 +919,97 @@ def create_proxy_app(
                     severity=result.severity.name,
                     score=round(result.score, 4),
                 )
+                receipt.emit(logger)
                 return JSONResponse(
                     status_code=403, content=_blocked_error(result, "request", protocol)
                 )
             if result.threats:
                 _shadow_log("shadowshield.proxy.request_flagged", result)
+        receipt.emit(logger)
         return None
 
     async def _render_non_stream(
         upstream_response: httpx.Response, identity: str | None, protocol: str
     ) -> Any:
-        if scan_response and upstream_response.status_code < 400:
+        receipt = CoverageReceipt(protocol, "response", "json")
+        if not scan_response:
+            receipt.mark("disabled")
+        elif upstream_response.status_code >= 400:
+            receipt.mark("upstream_error")
+        else:
             if len(upstream_response.content) > _MAX_INSPECTABLE_BODY_BYTES:
                 logger.warning(
                     "shadowshield.proxy.response_too_large",
                     body_bytes=len(upstream_response.content),
                 )
+                receipt.budget_exceeded = True
+                receipt.mark("budget_exceeded")
                 if shield.config.mode is Mode.SHADOW:
-                    prefix = upstream_response.content[:_MAX_INSPECTABLE_BODY_BYTES].decode(
-                        "utf-8", errors="replace"
-                    )
-                    result = await _safe_scan(prefix, Direction.OUTPUT, identity)
+                    try:
+                        prefix = upstream_response.content[:_MAX_INSPECTABLE_BODY_BYTES].decode(
+                            "utf-8"
+                        )
+                    except UnicodeDecodeError:
+                        receipt.mark("invalid_utf8")
+                        prefix = ""
+                    if prefix:
+                        receipt.text_units_discovered += 1
+                    result, scan_error = await _safe_scan(prefix, Direction.OUTPUT, identity)
+                    if scan_error is not None:
+                        receipt.mark(scan_error, scanner_error=True)
+                    if result is not None and prefix:
+                        receipt.record_scanned()
                     if result is not None and result.threats:
                         _shadow_log("shadowshield.proxy.response_flagged", result)
                 else:
+                    receipt.emit(logger)
                     return JSONResponse(
                         status_code=403,
                         content=_blocked_error(None, "response", protocol),
                     )
             else:
-                parsed = _try_json(upstream_response.text)
+                try:
+                    response_text = upstream_response.content.decode("utf-8")
+                except UnicodeDecodeError:
+                    response_text = ""
+                    receipt.mark("invalid_utf8")
+                parsed = _try_json(response_text) if response_text else None
                 if parsed is None:
                     logger.warning("shadowshield.proxy.response_invalid_json")
+                    if receipt.as_event()["reason"] != "invalid_utf8":
+                        receipt.mark("invalid_json")
                     if shield.config.mode is not Mode.SHADOW:
+                        receipt.emit(logger)
                         return JSONResponse(
                             status_code=503, content=_scan_unavailable_error(protocol)
                         )
-                extraction_limited = parsed is not None and not _response_extraction_complete(
-                    parsed, protocol
-                )
+                extraction = extract_response(parsed, protocol) if parsed else Extraction()
+                receipt.record_extraction(extraction)
+                extraction_limited = parsed is not None and extraction.enforcement_gap
                 if extraction_limited:
                     logger.warning("shadowshield.proxy.response_extraction_limit")
                 if extraction_limited and shield.config.mode is not Mode.SHADOW:
+                    receipt.emit(logger)
                     return JSONResponse(
                         status_code=403,
                         content=_blocked_error(None, "response", protocol),
                     )
-                for text in _protocol_response_texts(parsed, protocol) if parsed else ():
-                    result = await _safe_scan(text, Direction.OUTPUT, identity)
+                for text in extraction.texts:
+                    max_chars = shield.config.max_input_chars
+                    if max_chars and len(text) > max_chars:
+                        receipt.budget_exceeded = True
+                        receipt.mark("budget_exceeded")
+                    result, scan_error = await _safe_scan(text, Direction.OUTPUT, identity)
+                    if scan_error is not None:
+                        receipt.mark(scan_error, scanner_error=True)
                     if result is None:
                         if shield.config.mode is Mode.SHADOW:
                             continue
+                        receipt.emit(logger)
                         return JSONResponse(
                             status_code=503, content=_scan_unavailable_error(protocol)
                         )
+                    receipt.record_scanned()
                     if _is_terminal(result) and shield.config.mode is not Mode.SHADOW:
                         logger.warning(
                             "shadowshield.proxy.response_blocked",
@@ -942,12 +1017,14 @@ def create_proxy_app(
                             severity=result.severity.name,
                             score=round(result.score, 4),
                         )
+                        receipt.emit(logger)
                         return JSONResponse(
                             status_code=403,
                             content=_blocked_error(result, "response", protocol),
                         )
                     if result.threats:
                         _shadow_log("shadowshield.proxy.response_flagged", result)
+        receipt.emit(logger)
         return Response(
             content=upstream_response.content,
             status_code=upstream_response.status_code,
@@ -997,8 +1074,13 @@ def create_proxy_app(
             first_event: dict[str, Any] | None = None
             sequence_number = 0
             finalized = False
-            scanned_item_ids: set[str] = set()
             reported_detector_failure = False
+            receipt = CoverageReceipt(protocol, "response", "sse")
+            extractor = StreamProtocolExtractor(
+                protocol, scan_interval_chars=stream_scan_interval_chars
+            )
+            if not scan_response:
+                receipt.mark("disabled")
 
             def detector_scan_failed(result: Any) -> bool:
                 nonlocal reported_detector_failure
@@ -1013,6 +1095,7 @@ def create_proxy_app(
                         detector_failures=detector_failures,
                     )
                     reported_detector_failure = True
+                    receipt.mark("detector_error", scanner_error=True)
                 return shield.config.mode is not Mode.SHADOW
 
             async def inspect(frame: bytes) -> tuple[ScanResult | None, bool]:
@@ -1030,71 +1113,48 @@ def create_proxy_app(
                         sequence_number = max(sequence_number, event_sequence)
                 if not scan_response:
                     return None, False
-                if (
-                    isinstance(parsed, dict)
-                    and protocol == _CHAT
-                    and not _chat_stream_extraction_complete(parsed)
-                ):
+                candidate_type = parsed.get("type") if isinstance(parsed, dict) else None
+                event_type = candidate_type if isinstance(candidate_type, str) else None
+                if event_type in {"error", "response.failed"}:
+                    receipt.mark("upstream_error")
+                if data == "[DONE]":
+                    extraction = extractor.flush()
+                elif data is None:
+                    extraction = Extraction()
+                    if any(
+                        line == b"data" or line.startswith(b"data:") for line in frame.splitlines()
+                    ):
+                        extraction.mark_malformed()
+                        receipt.mark("invalid_utf8")
+                elif parsed is None:
+                    extraction = Extraction()
+                    extraction.mark_malformed()
+                elif event_type in {"error", "response.failed"}:
+                    extraction = extractor.flush()
+                else:
+                    extraction = extractor.consume(parsed)
+                receipt.record_extraction(extraction)
+                if extraction.enforcement_gap:
                     logger.warning("shadowshield.proxy.response_extraction_limit")
                     if shield.config.mode is not Mode.SHADOW:
                         return None, True
 
-                scan_texts: list[str] = []
-                delta = (
-                    _protocol_stream_delta_text(parsed, protocol)
-                    if isinstance(parsed, dict)
-                    else ""
-                )
-                if delta:
-                    scan_texts.append(delta)
-                    item_id = parsed.get("item_id") if isinstance(parsed, dict) else None
-                    if isinstance(item_id, str):
-                        scanned_item_ids.add(item_id)
-                elif isinstance(parsed, dict) and protocol == _ANTHROPIC:
-                    if parsed.get("type") == "content_block_start":
-                        scan_texts.extend(_anthropic_content_texts([parsed.get("content_block")]))
-                elif isinstance(parsed, dict) and protocol == _RESPONSES:
-                    event_type = parsed.get("type")
-                    if event_type == "response.output_item.done":
-                        item = parsed.get("item")
-                        if not _bounded_content_shape(item, count=[0]):
-                            logger.warning("shadowshield.proxy.response_extraction_limit")
-                            if shield.config.mode is not Mode.SHADOW:
-                                return None, True
-                        item_id = item.get("id") if isinstance(item, dict) else None
-                        if not isinstance(item_id, str) or item_id not in scanned_item_ids:
-                            scan_texts.extend(_openai_item_texts(item))
-                            if isinstance(item_id, str):
-                                scanned_item_ids.add(item_id)
-                    elif event_type == "response.completed":
-                        response = parsed.get("response")
-                        if isinstance(response, dict) and not _response_extraction_complete(
-                            response, _RESPONSES
-                        ):
-                            logger.warning("shadowshield.proxy.response_extraction_limit")
-                            if shield.config.mode is not Mode.SHADOW:
-                                return None, True
-                        output = response.get("output") if isinstance(response, dict) else None
-                        if isinstance(output, list):
-                            for item in output:
-                                item_id = item.get("id") if isinstance(item, dict) else None
-                                if isinstance(item_id, str) and item_id in scanned_item_ids:
-                                    continue
-                                scan_texts.extend(_openai_item_texts(item))
-                                if isinstance(item_id, str):
-                                    scanned_item_ids.add(item_id)
-
-                for scan_text in scan_texts[:_MAX_TEXTS_SCANNED]:
+                for scan_text in extraction.texts:
                     try:
                         terminal = await asyncio.to_thread(scanner.feed, scan_text)
-                    except Exception as exc:
+                    except Exception:
                         logger.error(
                             "shadowshield.proxy.scan_error",
                             direction="output",
-                            error_type=type(exc).__name__,
+                            error_type="scanner_error",
                         )
+                        receipt.mark("scanner_error", scanner_error=True)
                         return None, shield.config.mode is not Mode.SHADOW
+                    receipt.record_scanned()
                     current_result = terminal or getattr(scanner, "_worst", None)
+                    if _input_size_guarded(current_result):
+                        receipt.budget_exceeded = True
+                        receipt.mark("budget_exceeded")
                     if detector_scan_failed(current_result):
                         return None, True
                     if terminal is not None and shield.config.mode is not Mode.SHADOW:
@@ -1102,17 +1162,22 @@ def create_proxy_app(
 
                 if _is_stream_terminal(data, parsed, protocol):
                     finalized = True
+                    receipt.terminal_seen = True
                     try:
                         final = await asyncio.to_thread(scanner.finalize)
-                    except Exception as exc:
+                    except Exception:
                         logger.error(
                             "shadowshield.proxy.scan_error",
                             direction="output",
-                            error_type=type(exc).__name__,
+                            error_type="scanner_error",
                         )
+                        receipt.mark("scanner_error", scanner_error=True)
                         return None, shield.config.mode is not Mode.SHADOW
                     if detector_scan_failed(final):
                         return None, True
+                    if _input_size_guarded(final):
+                        receipt.budget_exceeded = True
+                        receipt.mark("budget_exceeded")
                     if _is_terminal(final) and shield.config.mode is not Mode.SHADOW:
                         return final, False
                     if final.threats:
@@ -1122,6 +1187,7 @@ def create_proxy_app(
             try:
                 if upstream_response.status_code >= 400:
                     # Upstream SSE errors are protocol messages, not model output.
+                    receipt.mark("upstream_error")
                     async for raw in upstream_response.aiter_bytes():
                         yield raw
                     return
@@ -1147,6 +1213,8 @@ def create_proxy_app(
                                     "shadowshield.proxy.sse_event_too_large",
                                     body_bytes=len(buffer),
                                 )
+                                receipt.budget_exceeded = True
+                                receipt.mark("event_too_large")
                                 if shield.config.mode is Mode.SHADOW:
                                     if len(buffer) > 3:
                                         yield bytes(buffer[:-3])
@@ -1165,6 +1233,8 @@ def create_proxy_app(
                                 "shadowshield.proxy.sse_event_too_large",
                                 body_bytes=len(frame),
                             )
+                            receipt.budget_exceeded = True
+                            receipt.mark("event_too_large")
                             if shield.config.mode is Mode.SHADOW:
                                 yield frame
                                 continue
@@ -1209,15 +1279,53 @@ def create_proxy_app(
                             return
                         yield bytes(buffer)
 
+                if scan_response and extractor.has_pending and not oversized_passthrough:
+                    pending = extractor.flush()
+                    receipt.record_extraction(pending)
+                    for scan_text in pending.texts:
+                        try:
+                            terminal = await asyncio.to_thread(scanner.feed, scan_text)
+                        except Exception:
+                            receipt.mark("scanner_error", scanner_error=True)
+                            if shield.config.mode is not Mode.SHADOW:
+                                yield _stream_failure_tail(
+                                    protocol,
+                                    None,
+                                    first_event,
+                                    sequence_number + 1,
+                                    scan_unavailable=True,
+                                )
+                            return
+                        receipt.record_scanned()
+                        if detector_scan_failed(terminal or getattr(scanner, "_worst", None)):
+                            yield _stream_failure_tail(
+                                protocol,
+                                None,
+                                first_event,
+                                sequence_number + 1,
+                                scan_unavailable=True,
+                            )
+                            return
+                        if _input_size_guarded(terminal or getattr(scanner, "_worst", None)):
+                            receipt.budget_exceeded = True
+                            receipt.mark("budget_exceeded")
+                        if terminal is not None and shield.config.mode is not Mode.SHADOW:
+                            yield _stream_failure_tail(
+                                protocol, terminal, first_event, sequence_number + 1
+                            )
+                            return
+
                 if scan_response and not finalized and not oversized_passthrough:
+                    receipt.mark("stream_incomplete")
                     try:
                         final = await asyncio.to_thread(scanner.finalize)
-                    except Exception as exc:
+                    except Exception:
                         logger.error(
                             "shadowshield.proxy.scan_error",
                             direction="output",
-                            error_type=type(exc).__name__,
+                            error_type="scanner_error",
                         )
+                        receipt.mark("scanner_error", scanner_error=True)
                         if shield.config.mode is not Mode.SHADOW:
                             yield _stream_failure_tail(
                                 protocol,
@@ -1236,6 +1344,9 @@ def create_proxy_app(
                             scan_unavailable=True,
                         )
                         return
+                    if _input_size_guarded(final):
+                        receipt.budget_exceeded = True
+                        receipt.mark("budget_exceeded")
                     if _is_terminal(final) and shield.config.mode is not Mode.SHADOW:
                         logger.warning(
                             "shadowshield.proxy.stream_terminal_at_finalize",
@@ -1248,7 +1359,16 @@ def create_proxy_app(
                         )
                     elif final.threats:
                         _shadow_log("shadowshield.proxy.response_flagged", final)
+                    if shield.config.mode is not Mode.SHADOW:
+                        yield _stream_failure_tail(
+                            protocol,
+                            None,
+                            first_event,
+                            sequence_number + 1,
+                            scan_unavailable=True,
+                        )
             finally:
+                receipt.emit(logger)
                 await stream_cm.__aexit__(None, None, None)
 
         return StreamingResponse(
@@ -1264,9 +1384,19 @@ def create_proxy_app(
         target = upstream + path
         if request.url.query:
             target += "?" + request.url.query
-        payload = _try_json(body.decode("utf-8", errors="replace"))
+        invalid_reason = "invalid_json"
+        try:
+            decoded_body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded_body = ""
+            invalid_reason = "invalid_utf8"
+        payload = _try_json(decoded_body) if decoded_body else None
         if payload is None:
             logger.warning("shadowshield.proxy.request_invalid_json")
+            receipt = CoverageReceipt(protocol, "request", "json")
+            receipt.malformed_units = 1
+            receipt.mark(invalid_reason)
+            receipt.emit(logger)
             if shield.config.mode is not Mode.SHADOW:
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             # Shadow is an observation lane and preserves uninspectable traffic.
