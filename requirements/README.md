@@ -5,6 +5,8 @@ each file for the exact command) and are installed everywhere with `--require-ha
 
 - `build.in` / `build.lock` — the minimal environment for reproducible wheel builds.
 - `container.lock` — the runtime image dependency set (dashboard extra, linux platform).
+- `runtime-base.in` / `runtime-base.lock` — hash-pinned replacement for a
+  vulnerable Python package already present in the digest-pinned base image.
 
 ## Auditing locally
 
