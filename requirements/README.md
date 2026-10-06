@@ -7,6 +7,8 @@ each file for the exact command) and are installed everywhere with `--require-ha
 - `container.lock` — the runtime image dependency set (dashboard extra, linux platform).
 - `runtime-base.in` / `runtime-base.lock` — hash-pinned replacement for a
   vulnerable Python package already present in the digest-pinned base image.
+  The runtime image removes build-only pip after installation, including pip's
+  vendored copy of the vulnerable package.
 
 ## Auditing locally
 

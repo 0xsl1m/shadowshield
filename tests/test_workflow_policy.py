@@ -101,6 +101,10 @@ def test_release_builds_install_hash_locked_dependencies() -> None:
     assert dockerfile.index(runtime_base_copy) < dockerfile.index(runtime_base_install)
     assert dockerfile.index(runtime_base_install) < dockerfile.index("USER shadowshield")
     assert "--no-deps /tmp/*.whl" in dockerfile
+    pip_check = dockerfile.index("python -m pip check")
+    pip_uninstall = dockerfile.index("python -m pip uninstall --yes pip")
+    assert dockerfile.rindex("python -m pip install") < pip_check < pip_uninstall
+    assert pip_uninstall < dockerfile.index("USER shadowshield")
 
     for workflow_name in ("ci.yml", "publish.yml"):
         workflow = (_WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")

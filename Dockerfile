@@ -34,10 +34,12 @@ RUN addgroup --system shadowshield \
     && chown shadowshield:shadowshield /var/lib/shadowshield
 COPY requirements/container.lock /tmp/container.lock
 COPY --from=builder /build/dist/*.whl /tmp/
+# pip is build-only; remove its vendored packages after dependency verification.
 RUN python -m pip install --no-cache-dir --only-binary=:all: \
         --require-hashes -r /tmp/container.lock \
     && python -m pip install --no-cache-dir --no-deps /tmp/*.whl \
     && python -m pip check \
+    && python -m pip uninstall --yes pip \
     && rm -f /tmp/*.whl /tmp/container.lock
 
 USER shadowshield
