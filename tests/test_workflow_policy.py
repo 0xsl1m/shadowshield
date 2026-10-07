@@ -72,7 +72,13 @@ def test_workflow_jobs_have_bounded_timeouts_and_actions_are_pinned() -> None:
 def test_release_builds_install_hash_locked_dependencies() -> None:
     build_lock = (_ROOT / "requirements" / "build.lock").read_text(encoding="utf-8")
     container_lock = (_ROOT / "requirements" / "container.lock").read_text(encoding="utf-8")
-    for name, lock in (("build", build_lock), ("container", container_lock)):
+    runtime_base_lock = (_ROOT / "requirements" / "runtime-base.lock").read_text(encoding="utf-8")
+    locks = (
+        ("build", build_lock),
+        ("container", container_lock),
+        ("runtime-base", runtime_base_lock),
+    )
+    for name, lock in locks:
         requirements = [
             line for line in lock.splitlines() if line and not line[0].isspace() and line[0] != "#"
         ]
@@ -85,10 +91,20 @@ def test_release_builds_install_hash_locked_dependencies() -> None:
         r"# syntax=docker/dockerfile:1@sha256:[0-9a-f]{64}",
         dockerfile.splitlines()[0],
     )
-    assert dockerfile.count("--require-hashes") == 2
+    assert dockerfile.count("--require-hashes") == len(locks)
     assert "requirements/build.lock" in dockerfile
     assert "requirements/container.lock" in dockerfile
+    runtime_base_copy = "COPY requirements/runtime-base.lock /tmp/runtime-base.lock"
+    runtime_base_install = "--require-hashes -r /tmp/runtime-base.lock"
+    assert runtime_base_copy in dockerfile
+    assert runtime_base_install in dockerfile
+    assert dockerfile.index(runtime_base_copy) < dockerfile.index(runtime_base_install)
+    assert dockerfile.index(runtime_base_install) < dockerfile.index("USER shadowshield")
     assert "--no-deps /tmp/*.whl" in dockerfile
+    pip_check = dockerfile.index("python -m pip check")
+    pip_uninstall = dockerfile.index("python -m pip uninstall --yes pip")
+    assert dockerfile.rindex("python -m pip install") < pip_check < pip_uninstall
+    assert pip_uninstall < dockerfile.index("USER shadowshield")
 
     for workflow_name in ("ci.yml", "publish.yml"):
         workflow = (_WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")

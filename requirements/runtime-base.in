@@ -1,0 +1,3 @@
+# Refresh a vulnerable package shipped in the digest-pinned Python base image.
+# Regenerate runtime-base.lock with the command in its header.
+urllib3==2.8.0

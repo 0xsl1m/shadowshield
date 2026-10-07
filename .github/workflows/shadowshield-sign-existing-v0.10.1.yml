@@ -4,7 +4,12 @@
 name: Sign existing ShadowShield v0.10.1 digest
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      expected_main_sha:
+        description: Full commit SHA expected at main for this dispatch
+        required: true
+        type: string
 
 concurrency:
   group: shadowshield-existing-v0.10.1-signature
@@ -25,10 +30,25 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
         run: |
           set -euo pipefail
 
-          # No event input, tag, or mutable image reference can select the target.
+          # Pin the dispatch and workflow definition to the same expected main commit.
+          [[ "$EXPECTED_MAIN_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'expected_main_sha must be a lowercase 40-character commit SHA' >&2
+            exit 1
+          }
+          [[ "$EXPECTED_MAIN_SHA" == "$GITHUB_SHA" ]] || {
+            echo 'expected_main_sha does not match GITHUB_SHA' >&2
+            exit 1
+          }
+          [[ "$EXPECTED_MAIN_SHA" == "$GITHUB_WORKFLOW_SHA" ]] || {
+            echo 'expected_main_sha does not match GITHUB_WORKFLOW_SHA' >&2
+            exit 1
+          }
+
+          # No event input, tag, or mutable image reference can select the target image.
           image='ghcr.io/0xsl1m/shadowshield@sha256:00c3b59e5e100fea1abb2e337e5baa5c6a17969df70260fb890917ef4ef9c0d0'
           oci_image="oci://$image"
           source_sha='80ca8f5db07985b199d6f3d8aa65b232286d003a'

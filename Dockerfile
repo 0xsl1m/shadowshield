@@ -14,13 +14,18 @@ FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+COPY requirements/runtime-base.lock /tmp/runtime-base.lock
 # Apply OS security updates at build time: the digest-pinned base image lags
 # Debian security point releases, and the CI Trivy gate rejects fixable
-# HIGH/CRITICAL CVEs. Everything else in this image stays lockfile-pinned.
+# HIGH/CRITICAL CVEs. Refresh the base image's vulnerable Python package with
+# a hash-locked wheel; everything else in this image stays lockfile-pinned.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install --no-cache-dir --upgrade pip "setuptools>=78.1.1" \
+    && python -m pip install --no-cache-dir --only-binary=:all: \
+        --require-hashes -r /tmp/runtime-base.lock \
+    && rm -f /tmp/runtime-base.lock \
     && rm -rf /usr/local/lib/python*/ensurepip
 
 RUN addgroup --system shadowshield \
@@ -29,10 +34,12 @@ RUN addgroup --system shadowshield \
     && chown shadowshield:shadowshield /var/lib/shadowshield
 COPY requirements/container.lock /tmp/container.lock
 COPY --from=builder /build/dist/*.whl /tmp/
+# pip is build-only; remove its vendored packages after dependency verification.
 RUN python -m pip install --no-cache-dir --only-binary=:all: \
         --require-hashes -r /tmp/container.lock \
     && python -m pip install --no-cache-dir --no-deps /tmp/*.whl \
     && python -m pip check \
+    && python -m pip uninstall --yes pip \
     && rm -f /tmp/*.whl /tmp/container.lock
 
 USER shadowshield
