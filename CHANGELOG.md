@@ -6,15 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-09
+
 ### Security
 
-- Prepare 0.10.2 from the merged image repair: hash-pin `urllib3` 2.8.0 in
+- Hash-pin `urllib3` 2.8.0 in
   build and runtime-base locks and remove build-only pip, including its
   vendored 2.7.0 copy, from the final container image.
 - Retire the v0.10.1 manual signing workflow. Its fixed published image digest
   still contains `urllib3` 2.7.0, so the workflow must not add a new trusted
-  signature to that older image. A future signature requires the independently
-  verified digest of a new release.
+  signature to that older image.
 
 ## [0.10.1] - 2026-09-22
 
