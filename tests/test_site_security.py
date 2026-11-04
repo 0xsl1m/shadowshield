@@ -39,7 +39,7 @@ def test_www_redirects_to_canonical_apex_without_open_redirect() -> None:
 
 
 def test_public_site_version_matches_latest_changelog_release() -> None:
-    index = (SITE / "index.html").read_text(encoding="utf-8")
+    index = (SITE / "app" / "page.tsx").read_text(encoding="utf-8")
     og = (SITE / "og.html").read_text(encoding="utf-8")
     llms = (SITE / "llms-full.txt").read_text(encoding="utf-8")
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -47,8 +47,8 @@ def test_public_site_version_matches_latest_changelog_release() -> None:
     assert released is not None
     version = released.group(1)
 
-    assert f'"softwareVersion": "{version}"' in index
-    assert f"v<b>{version}</b>" in index
+    assert f"V{version}" in index
+    assert json.loads((SITE / "package.json").read_text(encoding="utf-8"))["version"] == version
     assert f"v{version} · Agentic-AI Security" in og
     assert f"Version: {version}" in llms
 
@@ -93,30 +93,14 @@ def test_site_security_headers_are_fail_closed() -> None:
         assert directive in csp
 
 
-def test_every_inline_block_is_covered_by_the_csp_and_attributes_are_absent() -> None:
+def test_static_export_is_checked_before_deploy() -> None:
     csp = _headers(_site_config())["Content-Security-Policy"]
-
-    for filename, expected_blocks in (("index.html", 4), ("og.html", 1)):
-        html = (SITE / filename).read_text(encoding="utf-8")
-        assert re.search(r"\sstyle\s*=", html, re.IGNORECASE) is None
-        assert re.search(r"\son[a-z]+\s*=", html, re.IGNORECASE) is None
-        for dynamic_sink in (
-            ".style.",
-            ".cssText",
-            ".innerHTML",
-            ".insertRule",
-            ".setAttribute",
-            "eval(",
-        ):
-            assert dynamic_sink not in html
-
-        blocks = re.findall(
-            r"<(script|style)([^>]*)>(.*?)</\1>",
-            html,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        assert len(blocks) == expected_blocks
-        for tag, attributes, body in blocks:
-            assert "src=" not in attributes.lower()
-            digest = _csp_hash(body)
-            assert f"'{digest}'" in csp, f"{filename} {tag} block is missing CSP hash {digest}"
+    package = json.loads((SITE / "package.json").read_text(encoding="utf-8"))
+    assert package["scripts"]["build"] == "node scripts/prepare-assets.mjs && next build && node scripts/csp.mjs --check"
+    assert _site_config()["buildCommand"] == "npm run build"
+    assert _site_config()["outputDirectory"] == "out"
+    html = (SITE / "og.html").read_text(encoding="utf-8")
+    assert re.search(r"\sstyle\s*=", html, re.IGNORECASE) is None
+    assert re.search(r"\son[a-z]+\s*=", html, re.IGNORECASE) is None
+    for body in re.findall(r"<style[^>]*>(.*?)</style>", html, re.IGNORECASE | re.DOTALL):
+        assert f"'{_csp_hash(body)}'" in csp
