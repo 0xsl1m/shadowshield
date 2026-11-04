@@ -20,7 +20,7 @@ import asyncio
 import functools
 import json
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ..detectors.alignment import AlignmentJudge
 from ..detectors.base import Detector, build_detectors
@@ -36,6 +36,9 @@ from .config import Mode, ShieldConfig
 from .engine import Engine
 from .session import ConversationHistory, ShieldedSession
 from .types import Direction, ScanResult, ThreatBlockedError
+
+if TYPE_CHECKING:
+    from .segmented_observation import SegmentObservation
 
 F = TypeVar("F", bound=Callable[..., Any])
 MAX_READINESS_DETECTORS = 32
@@ -189,6 +192,68 @@ class Shield:
 
     def scan_input(self, text: str, **kwargs: Any) -> ScanResult:
         return self.scan(text, direction=Direction.INPUT, **kwargs)
+
+    def observe_segmented_shadow(
+        self, text: str, *, direction: Direction | str = Direction.INPUT
+    ) -> SegmentObservation:
+        """Experimentally observe long text; never returns an enforcement decision.
+
+        Isolated fresh built-in cheap detectors run. The separate scan omits
+        history, identity, canaries, and gated judges. Any custom or ML cheap
+        detector makes the observation unavailable: its state or side effects
+        cannot safely be reproduced here. This cannot establish full coverage
+        or policy parity.
+        """
+        from ..detectors.anomaly import AnomalyDetector
+        from ..detectors.canary import CanaryLeakDetector
+        from ..detectors.encoding import EncodingObfuscationDetector
+        from ..detectors.exfiltration import ExfiltrationDetector
+        from ..detectors.jailbreak import JailbreakDetector
+        from ..detectors.pii import PIIDetector
+        from ..detectors.prompt_injection import PromptInjectionDetector
+        from .segmented_observation import SegmentObservation, observe_windows
+
+        if self.config.mode is not Mode.SHADOW:
+            raise ValueError("segmented observation requires shadow mode")
+        if not isinstance(text, str):
+            raise TypeError("text must be a string")
+        chunk_chars = min(self.config.max_input_chars, 100_000)
+        if chunk_chars <= 0:
+            return SegmentObservation("unavailable", "unbounded_input_configuration")
+        allowed = {
+            AnomalyDetector,
+            CanaryLeakDetector,
+            EncodingObfuscationDetector,
+            ExfiltrationDetector,
+            JailbreakDetector,
+            PIIDetector,
+            PromptInjectionDetector,
+        }
+        detectors = self._engine._cheap_detectors
+        if any(type(detector) not in allowed for detector in detectors):
+            return SegmentObservation("unavailable", "unsupported_detector_configuration")
+        try:
+            isolated_detectors = [
+                (type(detector)(), self.config.detector_config(detector.name).model_copy(deep=True))
+                for detector in detectors
+            ]
+        except Exception:
+            return SegmentObservation("unavailable", "scanner_error")
+
+        def scan_window(window: str, context: Any) -> list[Any]:
+            threats = []
+            for detector, config in isolated_detectors:
+                if detector.applies_to(context.direction):
+                    context.options = config.options
+                    threats.extend(Engine._safe_scan(detector, window, context))
+            return threats
+
+        return observe_windows(
+            text,
+            direction=Direction(direction),
+            scan=scan_window,
+            chunk_chars=chunk_chars,
+        )
 
     def scan_output(self, text: str, **kwargs: Any) -> ScanResult:
         return self.scan(text, direction=Direction.OUTPUT, **kwargs)

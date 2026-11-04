@@ -775,6 +775,7 @@ def create_proxy_app(
     stream_scan_interval_chars: int = 256,
     stream_carry_chars: int = 2_048,
     transport: Any | None = None,
+    experimental_shadow_segments: bool = False,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
 
@@ -791,6 +792,9 @@ def create_proxy_app(
         stream_scan_interval_chars / stream_carry_chars: StreamScanner tuning
             for SSE completions — lower intervals cut malicious streams sooner.
         transport: optional httpx transport (tests / custom routing).
+        experimental_shadow_segments: opt in to additional cheap-detector-only
+            observations of long JSON units in shadow mode. Experimental; does
+            not establish full coverage and is never used for enforcement.
     """
     try:
         from fastapi import FastAPI, Request
@@ -805,6 +809,10 @@ def create_proxy_app(
     upstream = upstream.rstrip("/")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
+    if type(experimental_shadow_segments) is not bool:
+        raise TypeError("experimental_shadow_segments must be a boolean")
+    if experimental_shadow_segments and shield.config.mode is not Mode.SHADOW:
+        raise ValueError("segmented observations require shadow mode")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -880,6 +888,30 @@ def create_proxy_app(
             score=round(result.score, 4),
         )
 
+    async def _observe_long_shadow(text: str, direction: Direction) -> None:
+        # The proxy coverage receipt intentionally remains incomplete: window
+        # observations do not prove protocol coverage or detector parity. SSE
+        # is excluded to avoid unaccounted repeated work on streaming prefixes.
+        max_chars = shield.config.max_input_chars
+        if not experimental_shadow_segments or not max_chars or len(text) <= max_chars:
+            return
+        try:
+            observation = await asyncio.to_thread(
+                shield.observe_segmented_shadow, text, direction=direction
+            )
+            logger.info(
+                "shadowshield.proxy.experimental_segment_observation",
+                schema="shadowshield.segment-observation.v1",
+                direction=direction.value,
+                status=observation.status,
+                reason=observation.reason,
+                window_count=observation.window_count,
+                finding_count=len(observation.findings),
+            )
+        except Exception:
+            # Optional observation and log sinks must not affect shadow traffic.
+            pass
+
     async def _scan_request_payload(
         payload: dict[str, Any], identity: str | None, protocol: str
     ) -> Any | None:
@@ -899,6 +931,7 @@ def create_proxy_app(
                     status_code=403, content=_blocked_error(None, "request", protocol)
                 )
         for text in extraction.texts:
+            await _observe_long_shadow(text, Direction.INPUT)
             max_chars = shield.config.max_input_chars
             if max_chars and len(text) > max_chars:
                 receipt.budget_exceeded = True
@@ -995,6 +1028,7 @@ def create_proxy_app(
                         content=_blocked_error(None, "response", protocol),
                     )
                 for text in extraction.texts:
+                    await _observe_long_shadow(text, Direction.OUTPUT)
                     max_chars = shield.config.max_input_chars
                     if max_chars and len(text) > max_chars:
                         receipt.budget_exceeded = True
