@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-11-04
+
+### Security
+
+- Require a patched certifi trust bundle for package installs and pin
+  certifi 2026.10.23 in the build and container dependency locks.
+
 ## [0.10.2] - 2026-10-09
 
 ### Security
