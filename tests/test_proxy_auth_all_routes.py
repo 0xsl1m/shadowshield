@@ -117,3 +117,215 @@ async def test_cors_preflight_wrapper_stays_outside_proxy_auth() -> None:
         )
         assert preflight.status_code == 200
         assert (await client.options("/v2/generate")).status_code == 401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "stream"),
+    [("/v1/chat/completions", False), ("/v1/chat/completions", True), ("/v2/generate", False)],
+)
+async def test_gateway_bearer_is_never_sent_upstream(path: str, stream: bool) -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"choices": []})
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=["gateway-key"],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        payload = {"model": "mock", "messages": [{"role": "user", "content": "hello"}]}
+        if stream:
+            payload["stream"] = True
+        for headers in (
+            {"authorization": "Bearer gateway-key"},
+            {"x-api-key": "gateway-key", "authorization": "bearer gateway-key"},
+        ):
+            response = await client.post(path, headers=headers, json=payload)
+            assert response.status_code == 200
+            assert "authorization" not in calls[-1].headers
+            assert "x-api-key" not in calls[-1].headers
+
+
+@pytest.mark.asyncio
+async def test_distinct_provider_bearer_is_preserved_with_gateway_key() -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"choices": []})
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=["gateway-key"],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        headers = {"x-api-key": "gateway-key", "authorization": "Bearer provider-key"}
+        for path in ("/v1/chat/completions", "/v2/generate"):
+            response = await client.post(path, headers=headers, json={"model": "mock"})
+            assert response.status_code == 200
+            assert calls[-1].headers["authorization"] == "Bearer provider-key"
+            assert "x-api-key" not in calls[-1].headers
+
+        # A provider bearer without a gateway credential is not gateway auth.
+        denied = await client.post("/v2/generate", headers={"authorization": "Bearer provider-key"})
+        assert denied.status_code == 401
+        assert len(calls) == 2
+
+        # X-API-Key is the gateway credential when both headers are present;
+        # a provider key there must not be accepted via a valid gateway bearer.
+        denied = await client.post(
+            "/v2/generate",
+            headers={"x-api-key": "provider-key", "authorization": "Bearer gateway-key"},
+        )
+        assert denied.status_code == 401
+        assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_duplicate_authorization_headers_cannot_forward_gateway_key() -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"choices": []})
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=["gateway-key"],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        response = await client.post(
+            "/v2/generate",
+            headers=[
+                ("x-api-key", "gateway-key"),
+                ("authorization", "Bearer provider-key"),
+                ("authorization", "Bearer gateway-key"),
+            ],
+        )
+        assert response.status_code == 200
+        assert calls[-1].headers["authorization"] == "Bearer provider-key"
+        assert "gateway-key" not in str(calls[-1].headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        "Bearer gateway-key, Bearer provider-key",
+        "Bearer provider-key, Bearer gateway-key",
+        "Bearer\tgateway-key, Bearer provider-key",
+        "Bearer provider-key, Bearer\tgateway-key",
+        "Bearer\tgateway-key",
+    ],
+)
+async def test_combined_or_noncanonical_gateway_bearer_is_not_forwarded(
+    authorization: str,
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=["gateway-key"],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        response = await client.post(
+            "/v2/generate", headers={"x-api-key": "gateway-key", "authorization": authorization}
+        )
+        assert response.status_code == 200
+        assert "authorization" not in calls[-1].headers
+
+
+@pytest.mark.asyncio
+async def test_provider_bearer_is_preserved_when_gateway_has_no_configured_keys() -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        response = await client.get("/v2/models", headers={"authorization": "Bearer provider-key"})
+        assert response.status_code == 200
+        assert calls[-1].headers["authorization"] == "Bearer provider-key"
+
+
+@pytest.mark.asyncio
+async def test_same_gateway_and_provider_bearer_fails_upstream_without_leaking_key() -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(401 if "authorization" not in request.headers else 200)
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=["gateway-key"],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        response = await client.get(
+            "/v2/models",
+            headers={"x-api-key": "gateway-key", "authorization": "Bearer gateway-key"},
+        )
+        assert response.status_code == 401
+        assert len(calls) == 1
+        assert "authorization" not in calls[0].headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["gateway-key ", " gateway-key", " gateway-key "])
+async def test_explicit_gateway_key_with_surrounding_whitespace_is_not_forwarded(key: str) -> None:
+    calls: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200)
+
+    app = proxy.create_proxy_app(
+        ss.Shield.for_mode("shadow"),
+        "http://upstream.test",
+        api_keys=[key],
+        transport=httpx.MockTransport(upstream),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://gateway.test"
+    ) as client:
+        response = await client.get(
+            "/v2/models", headers={"x-api-key": key, "authorization": "Bearer gateway-key "}
+        )
+        assert response.status_code == 200
+        assert len(calls) == 1
+        assert "authorization" not in calls[0].headers

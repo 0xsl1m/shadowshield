@@ -27,7 +27,10 @@ Auth, body limits, concurrency caps, and security headers reuse the shared
 :mod:`shadowshield._security` middleware. When proxy auth keys are configured
 (``--api-key`` / ``SHADOWSHIELD_API_KEY``) clients authenticate with
 ``X-API-Key`` or ``Bearer``; ``X-API-Key`` is *never* forwarded upstream, so
-upstream credentials must travel in the ``Authorization`` header.
+upstream credentials must travel in the ``Authorization`` header. A Bearer
+value matching a configured gateway key is never forwarded, and ambiguous
+comma-delimited Bearer values are dropped. Use a distinct provider credential
+and send the gateway key via ``X-API-Key`` when both are required.
 
 Requires the ``dashboard`` extra: ``pip install shadowshield[dashboard]``.
 
@@ -59,6 +62,7 @@ from ._security import (
     SecurityHeadersMiddleware,
     extract_key,
     is_loopback,
+    key_is_valid,
     resolve_api_keys,
 )
 from .core.config import Mode
@@ -657,11 +661,37 @@ def _stream_failure_tail(
     return f"event: error\ndata: {json.dumps(event)}\n\n".encode()
 
 
-def _forward_headers(request_headers: Any) -> dict[str, str]:
+def _is_gateway_or_ambiguous_bearer(value: str, gateway_keys: list[str]) -> bool:
+    """Do not forward a gateway bearer or a combined Bearer credential."""
+    if not gateway_keys:
+        return False
+    parts = value.split(",")
+    tokens = [part.strip().split(None, 1) for part in parts]
+    if len(parts) > 1 and any(token and token[0].lower() == "bearer" for token in tokens):
+        # Authorization is not a list-valued Bearer field. Intermediaries can
+        # combine duplicate fields, making credential ownership ambiguous.
+        return True
+    token = tokens[0]
+    return (
+        len(token) == 2
+        and token[0].lower() == "bearer"
+        # Explicit keys can contain surrounding whitespace; conservatively
+        # compare their normalized form too before forwarding Bearer auth.
+        and key_is_valid(token[1].strip(), [key.strip() for key in gateway_keys])
+    )
+
+
+def _forward_headers(request_headers: Any, gateway_keys: list[str]) -> dict[str, str]:
+    # Authorization normally belongs to the provider, but the gateway also
+    # accepts a configured key as Bearer auth. Never send that credential to
+    # the upstream, even when a valid X-API-Key was also supplied.
     return {
         name: value
         for name, value in request_headers.items()
         if name.lower() not in _REQUEST_HEADER_DENYLIST
+        and not (
+            name.lower() == "authorization" and _is_gateway_or_ambiguous_bearer(value, gateway_keys)
+        )
     }
 
 
@@ -1051,7 +1081,7 @@ def create_proxy_app(
         protocol: str,
     ) -> Any:
         upstream_response = await client.request(
-            request.method, target, content=body, headers=_forward_headers(request.headers)
+            request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
         return await _render_non_stream(upstream_response, identity, protocol)
 
@@ -1065,7 +1095,7 @@ def create_proxy_app(
         # Open the upstream stream eagerly so its status line is known before
         # we commit to our own response status.
         stream_cm = client.stream(
-            request.method, target, content=body, headers=_forward_headers(request.headers)
+            request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
         upstream_response = await stream_cm.__aenter__()
         media_type = upstream_response.headers.get("content-type", "")
@@ -1457,7 +1487,7 @@ def create_proxy_app(
             target += "?" + request.url.query
         body = await request.body()
         upstream_response = await client.request(
-            request.method, target, content=body, headers=_forward_headers(request.headers)
+            request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
         return Response(
             content=upstream_response.content,
