@@ -47,7 +47,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'sha256-kg8yDAD08QeGmNXzfGXgGlur2E0EUjV9MXohwGT054M='; script-src-attr 'none'; style-src 'self' 'sha256-0sbaawxhaR0/lICMzh1CTFgDq70ArpsOeIPN8PSeIAU=' https://fonts.googleapis.com; style-src-attr 'none'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; upgrade-insecure-requests"
+          "value": "default-src 'self'; script-src 'self' 'sha256-e+mbytmSQ3jj0iRcixgL1J/WOQ0d8f7ntnq3UJAqvV4='; script-src-attr 'none'; style-src 'self' 'sha256-A7SpFIFump2lkEm4sAdpPMY2ozQg2dxP0D5guD1i5IA=' https://fonts.googleapis.com; style-src-attr 'none'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; upgrade-insecure-requests"
         }
       ]
     }
