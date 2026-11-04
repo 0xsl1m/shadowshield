@@ -1,89 +1,35 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<!-- Source for site/og.png — render at exactly 1200x630 and screenshot. Glass Box edition. -->
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet" />
-<style>
-  :root{
-    --void:#0d1317; --void2:#0a0f13; --glass:rgba(28,42,52,.42); --glass2:#141d24;
-    --edge:#2a3b46; --edge-hi:#3a5261; --text:#e9eef2; --muted:#a7bac7; --dim:#7c909d;
-    --ember:#ef5b3a; --ember-deep:#bd3a1e; --pass:#52c99a;
-    --mono:"IBM Plex Mono",monospace; --display:"Syne",sans-serif; --sans:"IBM Plex Sans",sans-serif;
-  }
-  *{margin:0;padding:0;box-sizing:border-box}
-  html,body{width:1200px;height:630px;overflow:hidden}
-  body{position:relative; font-family:var(--mono); color:var(--text);
-    background:
-      radial-gradient(ellipse 60% 55% at 82% 18%, rgba(239,91,58,.13), transparent 62%),
-      radial-gradient(ellipse 55% 60% at 12% 88%, rgba(82,201,154,.05), transparent 60%),
-      linear-gradient(rgba(58,82,97,.14) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(58,82,97,.14) 1px, transparent 1px),
-      linear-gradient(180deg, var(--void), var(--void2));
-    background-size:auto,auto,64px 64px,64px 64px,auto}
-  .frame{position:absolute; inset:36px; border:1px solid var(--edge); background:rgba(20,29,36,.55);
-    backdrop-filter:blur(4px); border-radius:18px; padding:44px 52px;
-    display:flex; flex-direction:column; justify-content:space-between;
-    box-shadow:inset 0 1px 0 rgba(233,238,242,.06), 0 30px 80px rgba(0,0,0,.5)}
-  .frame::before{content:""; position:absolute; top:0; left:10%; right:10%; height:1px;
-    background:linear-gradient(90deg, transparent, var(--ember), transparent); opacity:.7}
-  .top{display:flex; justify-content:space-between; align-items:center; font-size:14.5px;
-    letter-spacing:.18em; text-transform:uppercase; color:var(--muted);
-    border-bottom:1px solid var(--edge); padding-bottom:16px}
-  .top .dot{color:var(--ember)}
-  .mid{display:flex; align-items:center; gap:34px}
-  .mid .crest{flex:0 0 auto; width:116px; filter:drop-shadow(0 0 18px rgba(239,91,58,.35))}
-  h1{font-family:var(--display); font-weight:800; font-size:70px; line-height:.94; letter-spacing:-.02em}
-  h1 .g{color:var(--ember)}
-  .tag{font-family:var(--sans); font-weight:400; font-size:31px; line-height:1.25; color:var(--muted);
-    margin-top:18px; max-width:32ch}
-  .tag b{color:var(--ember); font-weight:500}
-  .stats{display:flex; border:1px solid var(--edge); border-radius:12px; background:var(--glass); overflow:hidden}
-  .stat{flex:1; padding:18px 6px 16px; border-right:1px solid var(--edge); text-align:center}
-  .stat:last-child{border-right:0}
-  .stat .n{font-family:var(--display); font-weight:700; font-size:38px; line-height:1}
-  .stat .n.pass{color:var(--pass)} .stat .n.acc{color:var(--ember)}
-  .stat .l{font-size:11.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--dim); margin-top:8px}
-  .bot{display:flex; justify-content:space-between; align-items:center}
-  .pip{font-size:21px; font-weight:500; background:rgba(0,0,0,.4); border:1px solid var(--edge-hi);
-    border-radius:8px; color:var(--text); padding:12px 20px}
-  .pip .p{color:var(--ember)}
-  .url{font-size:20px; letter-spacing:.05em; color:var(--text); font-weight:600}
-  .url .x{color:var(--ember)}
-</style>
+  <meta charset="utf-8">
+  <title>ShadowShield — security for agentic AI</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+    body { color: #edf8f7; font-family: Arial, sans-serif; background: #071114; }
+    .art { position: absolute; width: 1200px; height: 630px; object-fit: cover; opacity: .72; }
+    .shade { position: absolute; inset: 0; background: linear-gradient(90deg, #071114 0%, rgba(7,17,20,.96) 31%, rgba(7,17,20,.2) 82%); }
+    .frame { position: absolute; inset: 32px; border: 1px solid rgba(168,218,210,.24); }
+    .copy { position: absolute; left: 76px; top: 65px; width: 630px; }
+    .brand { font-weight: 800; letter-spacing: .16em; font-size: 19px; }
+    .brand span { color: #8ed9c8; }
+    .kicker { margin-top: 72px; color: #8ed9c8; font: 12px monospace; letter-spacing: .16em; }
+    h1 { margin: 24px 0 18px; font-size: 74px; line-height: .95; letter-spacing: -.055em; }
+    h1 em { font-weight: 400; color: #a7e2d4; }
+    p { color: #b8cac8; font-size: 19px; line-height: 1.5; max-width: 440px; }
+    .bottom { position: absolute; bottom: 63px; left: 76px; right: 76px; display: flex; justify-content: space-between; color: #b7cbc7; font: 12px monospace; letter-spacing: .1em; text-transform: uppercase; }
+    .version { color: #a7e2d4; }
+  </style>
 </head>
 <body>
-  <div class="frame">
-    <div class="top">
-      <span>ShadowShield <span class="dot">●</span> Open-Source · MIT</span>
-      <span>v0.10.2 · Agentic-AI Security</span>
-    </div>
-
-    <div class="mid">
-      <svg class="crest" viewBox="0 0 100 120" fill="none" stroke="#e9eef2" stroke-width="2.4" aria-hidden="true">
-        <path d="M50 4 L92 20 V58 C92 86 73 106 50 116 C27 106 8 86 8 58 V20 Z"/>
-        <path d="M50 18 L78 28 V57 C78 78 65 92 50 100 C35 92 22 78 22 57 V28 Z" stroke="#ef5b3a" stroke-width="1.6"/>
-        <path d="M33 60 l11 12 24 -28" stroke="#ef5b3a" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <div>
-        <h1>Shadow<span class="g">Shield</span></h1>
-        <div class="tag">A security shield for agentic AI that <b>shows its homework.</b></div>
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat"><div class="n pass">0%</div><div class="l">FPR &middot; deepset</div></div>
-      <div class="stat"><div class="n acc">48%</div><div class="l">Recall · deepset</div></div>
-      <div class="stat"><div class="n">11</div><div class="l">Detection layers</div></div>
-      <div class="stat"><div class="n">290+</div><div class="l">Tests · MIT</div></div>
-    </div>
-
-    <div class="bot">
-      <span class="pip"><span class="p">$</span> pip install shadowshield</span>
-      <span class="url">shadowshield<span class="x">.xyz</span></span>
-    </div>
+  <img class="art" src="shield-hero.webp" alt="">
+  <div class="shade"></div><div class="frame"></div>
+  <div class="copy">
+    <div class="brand">SHADOW<span>SHIELD</span></div>
+    <div class="kicker">OPEN SOURCE / DEFENSE IN DEPTH</div>
+    <h1>Guard the<br><em>unseen.</em></h1>
+    <p>Security for the boundary between your agent and untrusted information.</p>
   </div>
+  <div class="bottom"><span class="version">v0.10.3 · Agentic-AI Security</span><span>shadowshield.xyz</span></div>
 </body>
 </html>
