@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-11-04
+
+### Security
+
+- Enforce configured gateway authentication and concurrency limits on all
+  proxied HTTP routes, and prevent gateway bearer keys from being forwarded
+  to upstream providers.
+
 ## [0.10.3] - 2026-11-04
 
 ### Security
