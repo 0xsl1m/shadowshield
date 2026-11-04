@@ -314,6 +314,7 @@ class ConcurrencyLimitMiddleware:
         *,
         protected_paths: tuple[str, ...],
         protected_prefixes: tuple[str, ...] = (),
+        public_routes: tuple[tuple[str, str], ...] = (),
         max_concurrency: int = MAX_CONCURRENT_SCANS,
     ) -> None:
         if max_concurrency <= 0:
@@ -321,6 +322,7 @@ class ConcurrencyLimitMiddleware:
         self.app = app
         self.protected_paths = frozenset(protected_paths)
         self.protected_prefixes = protected_prefixes
+        self.public_routes = frozenset(public_routes)
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -328,6 +330,7 @@ class ConcurrencyLimitMiddleware:
         protected = path in self.protected_paths or any(
             path.startswith(prefix) for prefix in self.protected_prefixes
         )
+        protected = protected and (scope.get("method"), path) not in self.public_routes
         if scope.get("type") != "http" or not protected:
             await self.app(scope, receive, send)
             return
@@ -370,12 +373,14 @@ class EarlyAuthMiddleware:
         api_keys: list[str],
         protected_paths: tuple[str, ...],
         protected_prefixes: tuple[str, ...] = (),
+        public_routes: tuple[tuple[str, str], ...] = (),
         deny_when_unconfigured: bool = False,
     ) -> None:
         self.app = app
         self.api_keys = api_keys
         self.protected_paths = frozenset(protected_paths)
         self.protected_prefixes = protected_prefixes
+        self.public_routes = frozenset(public_routes)
         self.deny_when_unconfigured = deny_when_unconfigured
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -383,6 +388,7 @@ class EarlyAuthMiddleware:
         protected = path in self.protected_paths or any(
             path.startswith(prefix) for prefix in self.protected_prefixes
         )
+        protected = protected and (scope.get("method"), path) not in self.public_routes
         if (
             scope.get("type") == "http"
             and protected
