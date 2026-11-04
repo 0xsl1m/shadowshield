@@ -825,9 +825,21 @@ def create_proxy_app(
 
     app = FastAPI(title="ShadowShield Proxy", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.add_middleware(RequestBodyLimitMiddleware)
-    app.add_middleware(ConcurrencyLimitMiddleware, protected_paths=(), protected_prefixes=("/v1",))
+    # The catch-all can proxy any path and method. Protect all routes except
+    # the actual GET health endpoint, not every request to /health.
+    public_routes = (("GET", "/health"),)
     app.add_middleware(
-        EarlyAuthMiddleware, api_keys=keys, protected_paths=(), protected_prefixes=("/v1",)
+        ConcurrencyLimitMiddleware,
+        protected_paths=(),
+        protected_prefixes=("/",),
+        public_routes=public_routes,
+    )
+    app.add_middleware(
+        EarlyAuthMiddleware,
+        api_keys=keys,
+        protected_paths=(),
+        protected_prefixes=("/",),
+        public_routes=public_routes,
     )
     app.add_middleware(SecurityHeadersMiddleware)
 
