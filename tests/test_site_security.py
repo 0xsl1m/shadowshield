@@ -96,7 +96,10 @@ def test_site_security_headers_are_fail_closed() -> None:
 def test_static_export_is_checked_before_deploy() -> None:
     csp = _headers(_site_config())["Content-Security-Policy"]
     package = json.loads((SITE / "package.json").read_text(encoding="utf-8"))
-    assert package["scripts"]["build"] == "node scripts/prepare-assets.mjs && next build && node scripts/csp.mjs --check"
+    assert (
+        package["scripts"]["build"]
+        == "node scripts/prepare-assets.mjs && next build && node scripts/csp.mjs --check"
+    )
     assert _site_config()["buildCommand"] == "npm run build"
     assert _site_config()["outputDirectory"] == "out"
     html = (SITE / "og.html").read_text(encoding="utf-8")
