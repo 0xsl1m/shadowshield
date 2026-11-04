@@ -232,6 +232,13 @@ class Shield:
         detectors = self._engine._cheap_detectors
         if any(type(detector) not in allowed for detector in detectors):
             return SegmentObservation("unavailable", "unsupported_detector_configuration")
+        if any(
+            type(detector) is PIIDetector
+            and self.config.detector_config(detector.name).options.get("backend", "regex")
+            != "regex"
+            for detector in detectors
+        ):
+            return SegmentObservation("unavailable", "unsupported_detector_configuration")
         try:
             isolated_detectors = [
                 (type(detector)(), self.config.detector_config(detector.name).model_copy(deep=True))

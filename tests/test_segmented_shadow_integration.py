@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 import shadowshield as ss
-from shadowshield.core.config import LoggingConfig
+from shadowshield.core.config import DetectorConfig, LoggingConfig
 from shadowshield.core.segmented_observation import observe_windows
 from shadowshield.core.types import Direction, Severity, Threat, ThreatCategory
 from shadowshield.detectors.base import Detector, ScanContext
@@ -113,6 +116,19 @@ def test_observation_refuses_custom_detector_without_invoking_it() -> None:
     observed = shield.observe_segmented_shadow("private text")
     assert observed.reason == "unsupported_detector_configuration"
     assert calls == []
+
+
+def test_observation_refuses_presidio_backend_without_initializing(monkeypatch) -> None:
+    from shadowshield.detectors.pii import PIIDetector
+
+    monkeypatch.setattr(
+        PIIDetector, "_ensure_analyzer", lambda: pytest.fail("unexpected model load")
+    )
+    cfg = ss.ShieldConfig.for_mode(
+        "shadow", detectors={"pii": DetectorConfig(options={"backend": "both"})}
+    )
+    result = ss.Shield(cfg).observe_segmented_shadow("private text")
+    assert result.reason == "unsupported_detector_configuration" and result.findings == ()
 
 
 def test_observation_cannot_be_enabled_in_enforcing_mode() -> None:
@@ -242,3 +258,102 @@ async def test_observation_exception_never_breaks_shadow_forwarding(monkeypatch)
     ) as client:
         response = await client.post("/v1/chat/completions", json=body)
     assert response.status_code == 200 and response.content == reply
+
+
+@pytest.mark.asyncio
+async def test_one_observation_budget_covers_request_and_response(monkeypatch) -> None:
+    monkeypatch.delenv("SHADOWSHIELD_API_KEY", raising=False)
+    shield = _shield()
+    calls = []
+
+    def observe(text: str, **kwargs):
+        calls.append(text)
+        return SimpleNamespace(
+            status="observed", reason="cheap_detectors_only", window_count=1, findings=()
+        )
+
+    monkeypatch.setattr(shield, "observe_segmented_shadow", observe)
+    body = {
+        "model": "mock",
+        "messages": [
+            {"role": "user", "content": "a" * 500},
+            {"role": "user", "content": "b" * 500},
+        ],
+    }
+    reply = json.dumps({"choices": [{"message": {"content": "c" * 500}}]}).encode()
+    app = create_proxy_app(
+        shield,
+        "http://upstream.test",
+        experimental_shadow_segments=True,
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(
+                200, headers={"content-type": "application/json"}, content=reply
+            )
+        ),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://proxy.test"
+    ) as client:
+        response = await client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200 and response.content == reply
+    assert calls == ["a" * 500]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_first", [False, True])
+async def test_timed_out_or_cancelled_worker_holds_slot_until_done(
+    monkeypatch, cancel_first
+) -> None:
+    monkeypatch.delenv("SHADOWSHIELD_API_KEY", raising=False)
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr("shadowshield.proxy._SEGMENT_OBSERVATION_SLOTS", slots)
+    monkeypatch.setattr("shadowshield.proxy._SEGMENT_OBSERVATION_TIMEOUT_SECONDS", 0.05)
+    shield = _shield()
+    started = threading.Event()
+    release = threading.Event()
+    exited = threading.Event()
+    calls = []
+
+    def observe(text: str, **kwargs):
+        calls.append(text)
+        started.set()
+        try:
+            release.wait(3)
+            return SimpleNamespace(
+                status="observed", reason="cheap_detectors_only", window_count=1, findings=()
+            )
+        finally:
+            exited.set()
+
+    monkeypatch.setattr(shield, "observe_segmented_shadow", observe)
+    reply = b'{"choices":[{"message":{"content":"ok"}}]}'
+    app = create_proxy_app(
+        shield,
+        "http://upstream.test",
+        experimental_shadow_segments=True,
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(
+                200, headers={"content-type": "application/json"}, content=reply
+            )
+        ),
+    )
+    body = {"model": "mock", "messages": [{"role": "user", "content": "a" * 500}]}
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://proxy.test"
+        ) as client:
+            first = asyncio.create_task(client.post("/v1/chat/completions", json=body))
+            assert await asyncio.to_thread(started.wait, 1)
+            if cancel_first:
+                first.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+            else:
+                assert (await first).status_code == 200
+            assert (await client.post("/v1/chat/completions", json=body)).status_code == 200
+            assert len(calls) == 1
+    finally:
+        release.set()
+        assert await asyncio.to_thread(exited.wait, 1)
+        assert await asyncio.to_thread(slots.acquire, True, 1)
+        slots.release()
