@@ -1,0 +1,30 @@
+name: Site build and CSP
+on:
+  pull_request:
+    paths: ['site/**', '.github/workflows/site-build.yml']
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/site-build.yml']
+permissions:
+  contents: read
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - name: Install and verify static export
+        working-directory: site
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test:csp
+          npm run build
