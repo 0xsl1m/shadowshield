@@ -58,6 +58,7 @@ import hashlib
 import hmac
 import json
 import os
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -89,6 +90,12 @@ from .proxy_coverage import (
 )
 
 logger = structlog.get_logger("shadowshield.proxy")
+
+# Experimental observation must never queue unbounded work behind the normal
+# request executor. Slots remain held until their daemon worker really exits,
+# including after timeout, client cancellation, or ASGI loop shutdown.
+_SEGMENT_OBSERVATION_SLOTS = threading.BoundedSemaphore(2)
+_SEGMENT_OBSERVATION_TIMEOUT_SECONDS = 2.0
 
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 §7.6.1),
 # plus framing headers that no longer describe a (possibly modified) body.
@@ -854,6 +861,7 @@ def create_proxy_app(
     suppress_nonstream_upstream_error_details: bool = False,
     bound_nonstream_success_response: bool = False,
     transport: Any | None = None,
+    experimental_shadow_segments: bool = False,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
 
@@ -886,6 +894,9 @@ def create_proxy_app(
             This defaults off, requires response scanning and is not a complete
             memory or coverage guarantee. Streaming and metadata are unaffected.
         transport: optional httpx transport (tests / custom routing).
+        experimental_shadow_segments: opt in to additional cheap-detector-only
+            observations of long JSON units in shadow mode. Experimental; does
+            not establish full coverage and is never used for enforcement.
     """
     try:
         from fastapi import FastAPI, Request
@@ -920,6 +931,10 @@ def create_proxy_app(
         raise TypeError("bound_nonstream_success_response must be a boolean")
     if bound_nonstream_success_response and scan_response is not True:
         raise ValueError("bound_nonstream_success_response requires response scanning")
+    if type(experimental_shadow_segments) is not bool:
+        raise TypeError("experimental_shadow_segments must be a boolean")
+    if experimental_shadow_segments and shield.config.mode is not Mode.SHADOW:
+        raise ValueError("segmented observations require shadow mode")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1007,8 +1022,93 @@ def create_proxy_app(
             score=round(result.score, 4),
         )
 
+    async def _observe_long_shadow(text: str, direction: Direction, budget: list[int]) -> None:
+        # The proxy coverage receipt intentionally remains incomplete: window
+        # observations do not prove protocol coverage or detector parity. SSE
+        # is excluded to avoid unaccounted repeated work on streaming prefixes.
+        max_chars = shield.config.max_input_chars
+        if (
+            not experimental_shadow_segments
+            or not max_chars
+            or len(text) <= max_chars
+            or not budget[0]
+        ):
+            return
+        # One bounded observation across the entire request and its response.
+        # Skipped text remains partial in the existing coverage receipt.
+        budget[0] = 0
+        try:
+            slots = _SEGMENT_OBSERVATION_SLOTS
+            if not slots.acquire(blocking=False):
+                logger.info(
+                    "shadowshield.proxy.experimental_segment_observation",
+                    schema="shadowshield.segment-observation.v1",
+                    direction=direction.value,
+                    status="unavailable",
+                    reason="worker_busy",
+                    window_count=0,
+                    finding_count=0,
+                )
+                return
+            try:
+                loop = asyncio.get_running_loop()
+                completed = loop.create_future()
+            except Exception:
+                slots.release()
+                raise
+
+            def run() -> None:
+                try:
+                    result = shield.observe_segmented_shadow(text, direction=direction)
+                except BaseException:
+                    result = None
+                finally:
+                    slots.release()
+
+                def deliver() -> None:
+                    if not completed.done():
+                        completed.set_result(result)
+
+                with suppress(RuntimeError):
+                    loop.call_soon_threadsafe(deliver)
+
+            try:
+                threading.Thread(target=run, name="ss-segment-observation", daemon=True).start()
+            except Exception:
+                slots.release()
+                raise
+            try:
+                observation = await asyncio.wait_for(
+                    completed, _SEGMENT_OBSERVATION_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                logger.info(
+                    "shadowshield.proxy.experimental_segment_observation",
+                    schema="shadowshield.segment-observation.v1",
+                    direction=direction.value,
+                    status="unavailable",
+                    reason="worker_timeout",
+                    window_count=0,
+                    finding_count=0,
+                )
+                return
+            if observation is None:
+                return
+            logger.info(
+                "shadowshield.proxy.experimental_segment_observation",
+                schema="shadowshield.segment-observation.v1",
+                direction=direction.value,
+                status=observation.status,
+                reason=observation.reason,
+                window_count=observation.window_count,
+                finding_count=len(observation.findings),
+            )
+        except Exception:
+            # Optional observation and log sinks must not affect shadow traffic.
+            pass
+
     async def _scan_request_payload(
-        payload: dict[str, Any], identity: str | None, protocol: str
+        payload: dict[str, Any], identity: str | None, protocol: str, segment_budget: list[int]
     ) -> Any | None:
         """Return a native failure response when request inspection cannot pass."""
         receipt = CoverageReceipt(protocol, "request", "json")
@@ -1026,6 +1126,7 @@ def create_proxy_app(
                     status_code=403, content=_blocked_error(None, "request", protocol)
                 )
         for text in extraction.texts:
+            await _observe_long_shadow(text, Direction.INPUT, segment_budget)
             max_chars = shield.config.max_input_chars
             if max_chars and len(text) > max_chars:
                 receipt.budget_exceeded = True
@@ -1056,7 +1157,10 @@ def create_proxy_app(
         return None
 
     async def _render_non_stream(
-        upstream_response: httpx.Response, identity: str | None, protocol: str
+        upstream_response: httpx.Response,
+        identity: str | None,
+        protocol: str,
+        segment_budget: list[int],
     ) -> Any:
         receipt = CoverageReceipt(protocol, "response", "json")
         if not scan_response:
@@ -1122,6 +1226,7 @@ def create_proxy_app(
                         content=_blocked_error(None, "response", protocol),
                     )
                 for text in extraction.texts:
+                    await _observe_long_shadow(text, Direction.OUTPUT, segment_budget)
                     max_chars = shield.config.max_input_chars
                     if max_chars and len(text) > max_chars:
                         receipt.budget_exceeded = True
@@ -1164,6 +1269,7 @@ def create_proxy_app(
         body: bytes,
         identity: str | None,
         protocol: str,
+        segment_budget: list[int],
     ) -> Any:
         if (
             suppress_nonstream_upstream_error_details or bound_nonstream_success_response
@@ -1249,14 +1355,14 @@ def create_proxy_app(
                         headers={"content-type": "application/json"},
                         content=bytes(response_body),
                     )
-                    return await _render_non_stream(bounded_response, identity, protocol)
+                    return await _render_non_stream(bounded_response, identity, protocol, segment_budget)
                 # Other existing paths still buffer the response.
                 await upstream_response.aread()
-                return await _render_non_stream(upstream_response, identity, protocol)
+                return await _render_non_stream(upstream_response, identity, protocol, segment_budget)
         upstream_response = await client.request(
             request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
-        return await _render_non_stream(upstream_response, identity, protocol)
+        return await _render_non_stream(upstream_response, identity, protocol, segment_budget)
 
     async def _forward_stream(
         request: Request,
@@ -1264,6 +1370,7 @@ def create_proxy_app(
         body: bytes,
         identity: str | None,
         protocol: str,
+        segment_budget: list[int],
     ) -> Any:
         # Open the upstream stream eagerly so its status line is known before
         # we commit to our own response status.
@@ -1275,7 +1382,9 @@ def create_proxy_app(
         if "text/event-stream" not in media_type:
             try:
                 await upstream_response.aread()
-                return await _render_non_stream(upstream_response, identity, protocol)
+                return await _render_non_stream(
+                    upstream_response, identity, protocol, segment_budget
+                )
             finally:
                 await stream_cm.__aexit__(None, None, None)
         scanner = shield.stream_scanner(
@@ -1594,6 +1703,7 @@ def create_proxy_app(
 
     async def _handle_guarded(request: Request, path: str, protocol: str) -> Any:
         _count_request()
+        segment_budget = [1]
         body = await request.body()
         identity = _identity_for(request)
         target = upstream + path
@@ -1615,7 +1725,9 @@ def create_proxy_app(
             if shield.config.mode is not Mode.SHADOW:
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             # Shadow is an observation lane and preserves uninspectable traffic.
-            return await _forward_non_stream(request, target, body, identity, protocol)
+            return await _forward_non_stream(
+                request, target, body, identity, protocol, segment_budget
+            )
         if (
             require_nonstream_bidirectional
             and shield.config.mode is not Mode.SHADOW
@@ -1625,12 +1737,12 @@ def create_proxy_app(
                 status_code=503,
                 content=_stream_disabled_error(protocol),
             )
-        blocked = await _scan_request_payload(payload, identity, protocol)
+        blocked = await _scan_request_payload(payload, identity, protocol, segment_budget)
         if blocked is not None:
             return blocked
         if payload.get("stream") is True:
-            return await _forward_stream(request, target, body, identity, protocol)
-        return await _forward_non_stream(request, target, body, identity, protocol)
+            return await _forward_stream(request, target, body, identity, protocol, segment_budget)
+        return await _forward_non_stream(request, target, body, identity, protocol, segment_budget)
 
     @app.post("/v1/chat/completions/", include_in_schema=False)
     @app.post("/v1/chat/completions")
