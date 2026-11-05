@@ -27,8 +27,11 @@ candidate, enforcing modes reject unmatched routes by default; the separate
 `require_nonstream_bidirectional=True` option also rejects streaming on guarded
 routes. Those controls are independent: explicitly enable both non-stream
 inspection and error withholding, and keep unscanned metadata opt-in disabled
-for the narrow experiment. Existing success handling still buffers the response before its
-inspection limit is checked. Upstream request headers, timeouts and transport
+for the narrow experiment. By default success handling buffers before its
+inspection limit is checked; a separate `bound_nonstream_success_response`
+option constrains application-level aggregation and strips success headers in
+the same guarded enforcement scope. Transport prefetch and individual chunks
+remain outside its bound. Upstream request headers, timeouts and transport
 failures are governed by existing behavior. Provider-free integration tests
 exercise the combined controls; production use and enforcement readiness are
 not established.

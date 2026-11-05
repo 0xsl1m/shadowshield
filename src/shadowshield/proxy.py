@@ -1355,10 +1355,14 @@ def create_proxy_app(
                         headers={"content-type": "application/json"},
                         content=bytes(response_body),
                     )
-                    return await _render_non_stream(bounded_response, identity, protocol, segment_budget)
+                    return await _render_non_stream(
+                        bounded_response, identity, protocol, segment_budget
+                    )
                 # Other existing paths still buffer the response.
                 await upstream_response.aread()
-                return await _render_non_stream(upstream_response, identity, protocol, segment_budget)
+                return await _render_non_stream(
+                    upstream_response, identity, protocol, segment_budget
+                )
         upstream_response = await client.request(
             request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
