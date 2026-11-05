@@ -585,6 +585,20 @@ def _scan_unavailable_error(protocol: str) -> dict[str, Any]:
     }
 
 
+def _withheld_upstream_error(protocol: str) -> dict[str, Any]:
+    """A fixed response that contains no upstream error body or headers."""
+    message = "Upstream error details withheld by ShadowShield"
+    if protocol == _ANTHROPIC:
+        return {"type": "error", "error": {"type": "api_error", "message": message}}
+    return {
+        "error": {
+            "type": "upstream_error",
+            "message": message,
+            "code": "shadowshield_upstream_error",
+        }
+    }
+
+
 def _stream_failure_tail(
     protocol: str,
     result: ScanResult | None,
@@ -804,6 +818,7 @@ def create_proxy_app(
     timeout_seconds: float = 120.0,
     stream_scan_interval_chars: int = 256,
     stream_carry_chars: int = 2_048,
+    suppress_nonstream_upstream_error_details: bool = False,
     transport: Any | None = None,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
@@ -820,6 +835,10 @@ def create_proxy_app(
         timeout_seconds: upstream request timeout.
         stream_scan_interval_chars / stream_carry_chars: StreamScanner tuning
             for SSE completions — lower intervals cut malicious streams sooner.
+        suppress_nonstream_upstream_error_details: in enforcing modes, withhold
+            upstream 4xx/5xx bodies and headers on guarded non-stream requests.
+            The upstream status remains unchanged. Default off for compatibility.
+            This does not cover streaming or unmatched passthrough routes.
         transport: optional httpx transport (tests / custom routing).
     """
     try:
@@ -835,6 +854,8 @@ def create_proxy_app(
     upstream = upstream.rstrip("/")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
+    if type(suppress_nonstream_upstream_error_details) is not bool:
+        raise TypeError("suppress_nonstream_upstream_error_details must be a boolean")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1080,6 +1101,27 @@ def create_proxy_app(
         identity: str | None,
         protocol: str,
     ) -> Any:
+        if suppress_nonstream_upstream_error_details and shield.config.mode is not Mode.SHADOW:
+            # HTTPX's ordinary request() eagerly buffers the entire response.
+            # Inspect status before explicitly consuming the response body.
+            # HTTPX or the OS may still prefetch data while reading headers.
+            async with client.stream(
+                request.method,
+                target,
+                content=body,
+                headers=_forward_headers(request.headers, keys),
+            ) as upstream_response:
+                if upstream_response.status_code >= 400:
+                    receipt = CoverageReceipt(protocol, "response", "json")
+                    receipt.mark("upstream_error")
+                    receipt.emit(logger)
+                    return JSONResponse(
+                        status_code=upstream_response.status_code,
+                        content=_withheld_upstream_error(protocol),
+                    )
+                # Existing successful-response handling still buffers the body.
+                await upstream_response.aread()
+                return await _render_non_stream(upstream_response, identity, protocol)
         upstream_response = await client.request(
             request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
