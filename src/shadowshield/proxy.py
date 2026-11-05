@@ -23,6 +23,11 @@ timestamp of the most recent one, ``null`` until the first request). Health
 probes themselves are not counted, so operators can tell a healthy-but-idle
 proxy from one that is actually carrying traffic.
 
+In shadow mode unknown HTTP routes are forwarded without inspection. Enforcing
+modes reject unsupported routes by default. An explicit factory option permits
+bodyless GET/HEAD of ``/v1/models`` (and its trailing slash) as an unscanned
+metadata lane. This is not evidence that its response or query was inspected.
+
 Auth, body limits, concurrency caps, and security headers reuse the shared
 :mod:`shadowshield._security` middleware. When proxy auth keys are configured
 (``--api-key`` / ``SHADOWSHIELD_API_KEY``) clients authenticate with
@@ -793,6 +798,11 @@ def _is_safe_upstream_path(full_path: str) -> bool:
     return all(segment not in (".", "..") for segment in full_path.split("/"))
 
 
+def _is_metadata_passthrough(method: str, full_path: str) -> bool:
+    """Narrow compatibility lane; never treat unmatched inference as guarded."""
+    return method in {"GET", "HEAD"} and full_path in {"v1/models", "v1/models/"}
+
+
 def create_proxy_app(
     shield: Shield,
     upstream: str,
@@ -804,6 +814,7 @@ def create_proxy_app(
     timeout_seconds: float = 120.0,
     stream_scan_interval_chars: int = 256,
     stream_carry_chars: int = 2_048,
+    allow_unscanned_model_metadata: bool = False,
     transport: Any | None = None,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
@@ -820,6 +831,9 @@ def create_proxy_app(
         timeout_seconds: upstream request timeout.
         stream_scan_interval_chars / stream_carry_chars: StreamScanner tuning
             for SSE completions — lower intervals cut malicious streams sooner.
+        allow_unscanned_model_metadata: explicitly permit bodyless GET/HEAD
+            of /v1/models in enforcing modes. The request query and response
+            are not scanned. Other unsupported routes remain rejected.
         transport: optional httpx transport (tests / custom routing).
     """
     try:
@@ -835,6 +849,8 @@ def create_proxy_app(
     upstream = upstream.rstrip("/")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
+    if type(allow_unscanned_model_metadata) is not bool:
+        raise TypeError("allow_unscanned_model_metadata must be a boolean")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1475,12 +1491,26 @@ def create_proxy_app(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
     )
     async def passthrough(full_path: str, request: Request) -> Any:
-        # Blind forwarding for non-chat endpoints (model lists, embeddings,
-        # files). These carry no completion text to guard. The path suffix is
-        # client-controlled; validate it so it cannot escape the configured
-        # upstream's path space.
+        # The path suffix is client-controlled; validate it before either
+        # forwarding or returning a mode-specific unsupported-route response.
         if not _is_safe_upstream_path(full_path):
             return Response(status_code=400, content=b'{"error":{"message":"invalid path"}}')
+        if shield.config.mode is not Mode.SHADOW:
+            metadata_allowed = allow_unscanned_model_metadata and _is_metadata_passthrough(
+                request.method, full_path
+            )
+            # GET bodies can contain inference input even on an allowed path;
+            # the admission middleware may already have buffered the body.
+            if not metadata_allowed or await request.body():
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "code": "shadowshield_unsupported_route",
+                            "message": "Route cannot be inspected",
+                        }
+                    },
+                )
         _count_request()
         target = upstream + "/" + full_path
         if request.url.query:
