@@ -68,9 +68,23 @@ detector. Shadow mode preserves the original request/response body and SSE
 framing even on detections, parser failures, size limits and scanner failures.
 Existing HTTP authentication and body-admission limits still apply.
 
-GET retrieval of stored Responses, WebSocket transport, other passthrough
-routes, provider-retained context, and opaque/media semantics are outside this
-source qualification. No provider requests or live-session evidence are used.
+Enforcing modes reject unsupported HTTP routes with
+`shadowshield_unsupported_route` before forwarding. This includes stored
+Responses retrieval, embeddings and file operations; integrations that need
+those routes require explicit protocol support before enforcing can be used.
+Shadow mode continues to forward unsupported routes without inspection.
+Neither proxy health counters nor successful forwarding prove inspection.
+
+Applications constructing the proxy in Python may explicitly set
+`allow_unscanned_model_metadata=True` to allow only bodyless GET or HEAD of
+`/v1/models` (with an optional trailing slash) in enforcing modes. This narrow
+compatibility lane trusts the configured upstream's endpoint semantics and
+does not scan its query or response. It is off by default, is not exposed as a
+CLI option, and is not a general bypass or a coverage guarantee.
+
+WebSocket transport, provider-retained context, opaque/media semantics and
+unsupported routes remain outside source qualification. No provider requests
+or live-session evidence are used.
 
 ## Reproduce the qualification
 
