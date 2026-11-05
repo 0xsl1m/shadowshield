@@ -273,8 +273,18 @@ shadowshield proxy --upstream https://api.openai.com --port 8100 \
 ```
 
 ```python
-client = OpenAI(base_url="http://localhost:8100/v1", api_key=os.environ["OPENAI_API_KEY"])
+client = OpenAI(
+    base_url="http://localhost:8100/v1",
+    api_key=os.environ["OPENAI_API_KEY"],
+    default_headers={"X-API-Key": os.environ["GATEWAY_KEY"]},
+)
 ```
+
+The gateway key and provider key must be distinct. The gateway does not forward
+its own key upstream, including when it is supplied as a Bearer credential.
+Ambiguous comma-delimited Bearer authorization is also dropped. Check that your
+client supports sending the gateway and provider credentials separately before
+enabling gateway authentication.
 
 The same protection embeds in-process via `ShieldASGIMiddleware`
 (`shadowshield.middleware.asgi`) for any ASGI app — SSE passes through there,
