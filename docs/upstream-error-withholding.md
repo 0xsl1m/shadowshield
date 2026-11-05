@@ -20,10 +20,15 @@ has no effect in shadow mode: existing response bytes and headers are forwarded.
 Withholding removes provider error messages and headers, including potential
 retry information, and may disrupt client diagnostics or retry behavior.
 
-This option does **not** protect requests sent with `stream: true`, unmatched
-passthrough routes, upstream response headers before a successful status, or
-provider data in successful responses. Existing success handling still buffers
-the response before its inspection limit is checked. Upstream request headers,
-timeouts and transport failures are governed by existing behavior. Combining
-this option with separately proposed route and non-stream controls has not been
-qualified. No production use or enforcement readiness is implied.
+This option does **not** itself protect requests sent with `stream: true`, the
+explicitly permitted unscanned model-metadata route, upstream response headers
+before a successful status, or provider data in successful responses. In this
+candidate, enforcing modes reject unmatched routes by default; the separate
+`require_nonstream_bidirectional=True` option also rejects streaming on guarded
+routes. Those controls are independent: explicitly enable both non-stream
+inspection and error withholding, and keep unscanned metadata opt-in disabled
+for the narrow experiment. Existing success handling still buffers the response before its
+inspection limit is checked. Upstream request headers, timeouts and transport
+failures are governed by existing behavior. Provider-free integration tests
+exercise the combined controls; production use and enforcement readiness are
+not established.
