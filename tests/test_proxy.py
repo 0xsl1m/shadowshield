@@ -226,9 +226,15 @@ class TestNonStreaming:
         assert SECRET not in resp.text
 
     async def test_upstream_error_forwarded_verbatim(self) -> None:
-        upstream = MockUpstream()
+        upstream = MockUpstream(
+            scripted={
+                "/v1/chat/completions": httpx.Response(
+                    500, json={"error": {"message": "upstream down"}}
+                )
+            }
+        )
         async with _client(_app(upstream)) as client:
-            resp = await client.post("/v1/broken", json={})
+            resp = await client.post("/v1/chat/completions", json=_chat("hello"))
         assert resp.status_code == 500
         assert resp.json()["error"]["message"] == "upstream down"
 
@@ -1013,14 +1019,14 @@ class TestAuthAndPassthrough:
 
     async def test_passthrough_forwards_non_chat_routes(self) -> None:
         upstream = MockUpstream()
-        async with _client(_app(upstream)) as client:
+        async with _client(_app(upstream, allow_unscanned_model_metadata=True)) as client:
             resp = await client.get("/v1/models")
         assert resp.status_code == 200
         assert resp.json()["object"] == "list"
 
     async def test_health_counts_proxied_requests(self) -> None:
         upstream = MockUpstream()
-        async with _client(_app(upstream)) as client:
+        async with _client(_app(upstream, allow_unscanned_model_metadata=True)) as client:
             before = (await client.get("/health")).json()
             assert before == {
                 "status": "ok",
