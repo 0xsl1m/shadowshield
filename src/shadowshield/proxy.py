@@ -852,6 +852,7 @@ def create_proxy_app(
     allow_unscanned_model_metadata: bool = False,
     require_nonstream_bidirectional: bool = False,
     suppress_nonstream_upstream_error_details: bool = False,
+    bound_nonstream_success_response: bool = False,
     transport: Any | None = None,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
@@ -879,6 +880,11 @@ def create_proxy_app(
             upstream 4xx/5xx bodies and headers on guarded non-stream requests.
             The upstream status remains unchanged. Default off for compatibility.
             This does not cover streaming or explicitly permitted unscanned metadata.
+        bound_nonstream_success_response: in enforcing modes on guarded non-stream
+            routes, reject encoded or over-limit successful responses before
+            aggregating beyond the inspection budget; strip upstream headers.
+            This defaults off, requires response scanning and is not a complete
+            memory or coverage guarantee. Streaming and metadata are unaffected.
         transport: optional httpx transport (tests / custom routing).
     """
     try:
@@ -910,6 +916,10 @@ def create_proxy_app(
             )
     if type(suppress_nonstream_upstream_error_details) is not bool:
         raise TypeError("suppress_nonstream_upstream_error_details must be a boolean")
+    if type(bound_nonstream_success_response) is not bool:
+        raise TypeError("bound_nonstream_success_response must be a boolean")
+    if bound_nonstream_success_response and scan_response is not True:
+        raise ValueError("bound_nonstream_success_response requires response scanning")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1155,17 +1165,32 @@ def create_proxy_app(
         identity: str | None,
         protocol: str,
     ) -> Any:
-        if suppress_nonstream_upstream_error_details and shield.config.mode is not Mode.SHADOW:
+        if (
+            suppress_nonstream_upstream_error_details or bound_nonstream_success_response
+        ) and shield.config.mode is not Mode.SHADOW:
             # HTTPX's ordinary request() eagerly buffers the entire response.
             # Inspect status before explicitly consuming the response body.
             # HTTPX or the OS may still prefetch data while reading headers.
+            forwarded_headers = _forward_headers(request.headers, keys)
+            if bound_nonstream_success_response:
+                # Do not invite compressed output: it cannot be bounded by
+                # decoded size before the decoder allocates the expansion.
+                forwarded_headers = {
+                    name: value
+                    for name, value in forwarded_headers.items()
+                    if name.lower() != "accept-encoding"
+                }
+                forwarded_headers["accept-encoding"] = "identity"
             async with client.stream(
                 request.method,
                 target,
                 content=body,
-                headers=_forward_headers(request.headers, keys),
+                headers=forwarded_headers,
             ) as upstream_response:
-                if upstream_response.status_code >= 400:
+                if (
+                    upstream_response.status_code >= 400
+                    and suppress_nonstream_upstream_error_details
+                ):
                     receipt = CoverageReceipt(protocol, "response", "json")
                     receipt.mark("upstream_error")
                     receipt.emit(logger)
@@ -1173,7 +1198,59 @@ def create_proxy_app(
                         status_code=upstream_response.status_code,
                         content=_withheld_upstream_error(protocol),
                     )
-                # Existing successful-response handling still buffers the body.
+                if upstream_response.status_code < 400 and bound_nonstream_success_response:
+                    # Partial representations and redirects cannot be treated
+                    # as complete scanned responses after header stripping.
+                    if (
+                        not 200 <= upstream_response.status_code < 300
+                        or upstream_response.status_code == 206
+                        or "content-range" in upstream_response.headers
+                    ):
+                        receipt = CoverageReceipt(protocol, "response", "json")
+                        receipt.mark("unknown_shape")
+                        receipt.emit(logger)
+                        return JSONResponse(
+                            status_code=503, content=_scan_unavailable_error(protocol)
+                        )
+                    encoding = upstream_response.headers.get("content-encoding", "").strip().lower()
+                    if encoding not in ("", "identity"):
+                        receipt = CoverageReceipt(protocol, "response", "json")
+                        receipt.mark("unknown_shape")
+                        receipt.emit(logger)
+                        return JSONResponse(
+                            status_code=503, content=_scan_unavailable_error(protocol)
+                        )
+                    response_body = bytearray()
+                    try:
+                        async for chunk in upstream_response.aiter_raw():
+                            if len(chunk) > _MAX_INSPECTABLE_BODY_BYTES - len(response_body):
+                                receipt = CoverageReceipt(protocol, "response", "json")
+                                receipt.budget_exceeded = True
+                                receipt.mark("budget_exceeded")
+                                receipt.emit(logger)
+                                return JSONResponse(
+                                    status_code=403,
+                                    content=_blocked_error(None, "response", protocol),
+                                )
+                            response_body.extend(chunk)
+                    except Exception:
+                        # Transport/stream exceptions may include user data.
+                        # Do not expose or log their messages or partial bytes.
+                        receipt = CoverageReceipt(protocol, "response", "json")
+                        receipt.mark("stream_incomplete")
+                        receipt.emit(logger)
+                        return JSONResponse(
+                            status_code=503, content=_scan_unavailable_error(protocol)
+                        )
+                    # Do not forward uninspected upstream headers. The body is
+                    # still scanned by the same protocol-aware path below.
+                    bounded_response = httpx.Response(
+                        upstream_response.status_code,
+                        headers={"content-type": "application/json"},
+                        content=bytes(response_body),
+                    )
+                    return await _render_non_stream(bounded_response, identity, protocol)
+                # Other existing paths still buffer the response.
                 await upstream_response.aread()
                 return await _render_non_stream(upstream_response, identity, protocol)
         upstream_response = await client.request(
