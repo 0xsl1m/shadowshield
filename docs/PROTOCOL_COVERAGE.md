@@ -68,9 +68,40 @@ detector. Shadow mode preserves the original request/response body and SSE
 framing even on detections, parser failures, size limits and scanner failures.
 Existing HTTP authentication and body-admission limits still apply.
 
-GET retrieval of stored Responses, WebSocket transport, other passthrough
-routes, provider-retained context, and opaque/media semantics are outside this
-source qualification. No provider requests or live-session evidence are used.
+Enforcing modes reject unsupported HTTP routes with
+`shadowshield_unsupported_route` before forwarding. This includes stored
+Responses retrieval, embeddings and file operations; integrations that need
+those routes require explicit protocol support before enforcing can be used.
+Shadow mode continues to forward unsupported routes without inspection.
+Neither proxy health counters nor successful forwarding prove inspection.
+
+Applications constructing the proxy in Python may explicitly set
+`allow_unscanned_model_metadata=True` to allow only bodyless GET or HEAD of
+`/v1/models` (with an optional trailing slash) in enforcing modes. This narrow
+compatibility lane trusts the configured upstream's endpoint semantics and
+does not scan its query or response. It is off by default, is not exposed as a
+CLI option, and is not a general bypass or a coverage guarantee.
+
+Disabling `scan_request` or `scan_response` in an enforcing proxy skips that
+direction entirely; explicit existing callers retain this behavior. A fixed,
+content-free startup warning is attempted whenever a direction is disabled;
+if the configured log sink fails, forwarding behavior is unchanged. The CLI's
+`--no-scan-response` also opts out of response inspection. Such a proxy must not be represented as providing
+bidirectional scanning merely because its mode is enforcing.
+
+Python callers may opt into `require_nonstream_bidirectional=True` to require
+both scan directions and reject streaming requests on supported guarded routes
+before they reach the upstream in enforcing modes. It is off by default and does not change shadow
+forwarding. This prevents the known incremental SSE disclosure window for
+requests sent through supported guarded routes, at the cost of streaming. It
+is not a complete-inspection guarantee: opaque or retained provider content,
+unsupported paths, upstream error bodies, scanner quality, and the existing
+non-streaming response buffering behavior remain separate limitations. This
+option is not exposed in the CLI and has not been qualified for production.
+
+WebSocket transport, provider-retained context, and opaque/media semantics
+remain outside source qualification. No provider requests or live-session
+evidence are used.
 
 ## Reproduce the qualification
 

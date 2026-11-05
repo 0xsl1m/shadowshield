@@ -23,6 +23,18 @@ timestamp of the most recent one, ``null`` until the first request). Health
 probes themselves are not counted, so operators can tell a healthy-but-idle
 proxy from one that is actually carrying traffic.
 
+In shadow mode unknown HTTP routes are forwarded without inspection. Enforcing
+modes reject unsupported routes by default. An explicit factory option permits
+bodyless GET/HEAD of ``/v1/models`` (and its trailing slash) as an unscanned
+metadata lane. This is not evidence that its response or query was inspected.
+On supported guarded routes, enforcing callers can explicitly require both
+scan directions and reject incremental streaming using
+``require_nonstream_bidirectional``. This is a limited transport contract,
+not a guarantee of complete inspection or safe policy: opaque content,
+extraction gaps and unsupported routes still require separate handling. The
+default retains existing incremental streaming and explicit scan-disable
+behavior.
+
 Auth, body limits, concurrency caps, and security headers reuse the shared
 :mod:`shadowshield._security` middleware. When proxy auth keys are configured
 (``--api-key`` / ``SHADOWSHIELD_API_KEY``) clients authenticate with
@@ -48,7 +60,7 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any
 
@@ -585,6 +597,34 @@ def _scan_unavailable_error(protocol: str) -> dict[str, Any]:
     }
 
 
+def _stream_disabled_error(protocol: str) -> dict[str, Any]:
+    message = "Incremental streaming is disabled by the inspection contract"
+    if protocol == _ANTHROPIC:
+        return {"type": "error", "error": {"type": "api_error", "message": message}}
+    return {
+        "error": {
+            "message": message,
+            "type": "server_error",
+            "param": None,
+            "code": "shadowshield_streaming_disabled",
+        }
+    }
+
+
+def _withheld_upstream_error(protocol: str) -> dict[str, Any]:
+    """A fixed response that contains no upstream error body or headers."""
+    message = "Upstream error details withheld by ShadowShield"
+    if protocol == _ANTHROPIC:
+        return {"type": "error", "error": {"type": "api_error", "message": message}}
+    return {
+        "error": {
+            "type": "upstream_error",
+            "message": message,
+            "code": "shadowshield_upstream_error",
+        }
+    }
+
+
 def _stream_failure_tail(
     protocol: str,
     result: ScanResult | None,
@@ -793,6 +833,11 @@ def _is_safe_upstream_path(full_path: str) -> bool:
     return all(segment not in (".", "..") for segment in full_path.split("/"))
 
 
+def _is_metadata_passthrough(method: str, full_path: str) -> bool:
+    """Narrow compatibility lane; never treat unmatched inference as guarded."""
+    return method in {"GET", "HEAD"} and full_path in {"v1/models", "v1/models/"}
+
+
 def create_proxy_app(
     shield: Shield,
     upstream: str,
@@ -804,6 +849,9 @@ def create_proxy_app(
     timeout_seconds: float = 120.0,
     stream_scan_interval_chars: int = 256,
     stream_carry_chars: int = 2_048,
+    allow_unscanned_model_metadata: bool = False,
+    require_nonstream_bidirectional: bool = False,
+    suppress_nonstream_upstream_error_details: bool = False,
     transport: Any | None = None,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
@@ -820,6 +868,17 @@ def create_proxy_app(
         timeout_seconds: upstream request timeout.
         stream_scan_interval_chars / stream_carry_chars: StreamScanner tuning
             for SSE completions — lower intervals cut malicious streams sooner.
+        allow_unscanned_model_metadata: explicitly permit bodyless GET/HEAD
+            of /v1/models in enforcing modes. The request query and response
+            are not scanned. Other unsupported routes remain rejected.
+        require_nonstream_bidirectional: opt into requiring both scan directions
+            and rejecting streaming requests on supported guarded routes in
+            enforcing modes. This does not make unsupported, opaque or partial
+            content fully inspected. Unsupported routes are rejected in enforcing modes.
+        suppress_nonstream_upstream_error_details: in enforcing modes, withhold
+            upstream 4xx/5xx bodies and headers on guarded non-stream requests.
+            The upstream status remains unchanged. Default off for compatibility.
+            This does not cover streaming or explicitly permitted unscanned metadata.
         transport: optional httpx transport (tests / custom routing).
     """
     try:
@@ -835,6 +894,22 @@ def create_proxy_app(
     upstream = upstream.rstrip("/")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
+    if type(allow_unscanned_model_metadata) is not bool:
+        raise TypeError("allow_unscanned_model_metadata must be a boolean")
+    if type(require_nonstream_bidirectional) is not bool:
+        raise TypeError("require_nonstream_bidirectional must be a boolean")
+    if require_nonstream_bidirectional and (scan_request is not True or scan_response is not True):
+        raise ValueError("require_nonstream_bidirectional requires both scan directions")
+    if not scan_request or not scan_response:
+        # A failed warning sink must not change existing forwarding behavior.
+        with suppress(Exception):
+            logger.warning(
+                "shadowshield.proxy.inspection_disabled",
+                request_scan=bool(scan_request),
+                response_scan=bool(scan_response),
+            )
+    if type(suppress_nonstream_upstream_error_details) is not bool:
+        raise TypeError("suppress_nonstream_upstream_error_details must be a boolean")
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1080,6 +1155,27 @@ def create_proxy_app(
         identity: str | None,
         protocol: str,
     ) -> Any:
+        if suppress_nonstream_upstream_error_details and shield.config.mode is not Mode.SHADOW:
+            # HTTPX's ordinary request() eagerly buffers the entire response.
+            # Inspect status before explicitly consuming the response body.
+            # HTTPX or the OS may still prefetch data while reading headers.
+            async with client.stream(
+                request.method,
+                target,
+                content=body,
+                headers=_forward_headers(request.headers, keys),
+            ) as upstream_response:
+                if upstream_response.status_code >= 400:
+                    receipt = CoverageReceipt(protocol, "response", "json")
+                    receipt.mark("upstream_error")
+                    receipt.emit(logger)
+                    return JSONResponse(
+                        status_code=upstream_response.status_code,
+                        content=_withheld_upstream_error(protocol),
+                    )
+                # Existing successful-response handling still buffers the body.
+                await upstream_response.aread()
+                return await _render_non_stream(upstream_response, identity, protocol)
         upstream_response = await client.request(
             request.method, target, content=body, headers=_forward_headers(request.headers, keys)
         )
@@ -1443,6 +1539,15 @@ def create_proxy_app(
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             # Shadow is an observation lane and preserves uninspectable traffic.
             return await _forward_non_stream(request, target, body, identity, protocol)
+        if (
+            require_nonstream_bidirectional
+            and shield.config.mode is not Mode.SHADOW
+            and payload.get("stream", False) is not False
+        ):
+            return JSONResponse(
+                status_code=503,
+                content=_stream_disabled_error(protocol),
+            )
         blocked = await _scan_request_payload(payload, identity, protocol)
         if blocked is not None:
             return blocked
@@ -1475,12 +1580,26 @@ def create_proxy_app(
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
     )
     async def passthrough(full_path: str, request: Request) -> Any:
-        # Blind forwarding for non-chat endpoints (model lists, embeddings,
-        # files). These carry no completion text to guard. The path suffix is
-        # client-controlled; validate it so it cannot escape the configured
-        # upstream's path space.
+        # The path suffix is client-controlled; validate it before either
+        # forwarding or returning a mode-specific unsupported-route response.
         if not _is_safe_upstream_path(full_path):
             return Response(status_code=400, content=b'{"error":{"message":"invalid path"}}')
+        if shield.config.mode is not Mode.SHADOW:
+            metadata_allowed = allow_unscanned_model_metadata and _is_metadata_passthrough(
+                request.method, full_path
+            )
+            # GET bodies can contain inference input even on an allowed path;
+            # the admission middleware may already have buffered the body.
+            if not metadata_allowed or await request.body():
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "code": "shadowshield_unsupported_route",
+                            "message": "Route cannot be inspected",
+                        }
+                    },
+                )
         _count_request()
         target = upstream + "/" + full_path
         if request.url.query:
