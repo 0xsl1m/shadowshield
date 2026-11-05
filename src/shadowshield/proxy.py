@@ -27,6 +27,13 @@ In shadow mode unknown HTTP routes are forwarded without inspection. Enforcing
 modes reject unsupported routes by default. An explicit factory option permits
 bodyless GET/HEAD of ``/v1/models`` (and its trailing slash) as an unscanned
 metadata lane. This is not evidence that its response or query was inspected.
+On supported guarded routes, enforcing callers can explicitly require both
+scan directions and reject incremental streaming using
+``require_nonstream_bidirectional``. This is a limited transport contract,
+not a guarantee of complete inspection or safe policy: opaque content,
+extraction gaps and unsupported routes still require separate handling. The
+default retains existing incremental streaming and explicit scan-disable
+behavior.
 
 Auth, body limits, concurrency caps, and security headers reuse the shared
 :mod:`shadowshield._security` middleware. When proxy auth keys are configured
@@ -53,7 +60,7 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Any
 
@@ -590,6 +597,20 @@ def _scan_unavailable_error(protocol: str) -> dict[str, Any]:
     }
 
 
+def _stream_disabled_error(protocol: str) -> dict[str, Any]:
+    message = "Incremental streaming is disabled by the inspection contract"
+    if protocol == _ANTHROPIC:
+        return {"type": "error", "error": {"type": "api_error", "message": message}}
+    return {
+        "error": {
+            "message": message,
+            "type": "server_error",
+            "param": None,
+            "code": "shadowshield_streaming_disabled",
+        }
+    }
+
+
 def _stream_failure_tail(
     protocol: str,
     result: ScanResult | None,
@@ -815,6 +836,7 @@ def create_proxy_app(
     stream_scan_interval_chars: int = 256,
     stream_carry_chars: int = 2_048,
     allow_unscanned_model_metadata: bool = False,
+    require_nonstream_bidirectional: bool = False,
     transport: Any | None = None,
 ) -> Any:
     """Build the proxy ASGI app guarding an OpenAI-compatible ``upstream``.
@@ -834,6 +856,10 @@ def create_proxy_app(
         allow_unscanned_model_metadata: explicitly permit bodyless GET/HEAD
             of /v1/models in enforcing modes. The request query and response
             are not scanned. Other unsupported routes remain rejected.
+        require_nonstream_bidirectional: opt into requiring both scan directions
+            and rejecting streaming requests on supported guarded routes in
+            enforcing modes. This does not make unsupported, opaque or partial
+            content fully inspected. Unsupported routes are rejected in enforcing modes.
         transport: optional httpx transport (tests / custom routing).
     """
     try:
@@ -851,6 +877,18 @@ def create_proxy_app(
         raise ValueError("timeout_seconds must be greater than zero")
     if type(allow_unscanned_model_metadata) is not bool:
         raise TypeError("allow_unscanned_model_metadata must be a boolean")
+    if type(require_nonstream_bidirectional) is not bool:
+        raise TypeError("require_nonstream_bidirectional must be a boolean")
+    if require_nonstream_bidirectional and (scan_request is not True or scan_response is not True):
+        raise ValueError("require_nonstream_bidirectional requires both scan directions")
+    if not scan_request or not scan_response:
+        # A failed warning sink must not change existing forwarding behavior.
+        with suppress(Exception):
+            logger.warning(
+                "shadowshield.proxy.inspection_disabled",
+                request_scan=bool(scan_request),
+                response_scan=bool(scan_response),
+            )
 
     keys = resolve_api_keys(api_keys, include_environment=include_environment_keys)
     client = httpx.AsyncClient(timeout=timeout_seconds, transport=transport)
@@ -1459,6 +1497,15 @@ def create_proxy_app(
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             # Shadow is an observation lane and preserves uninspectable traffic.
             return await _forward_non_stream(request, target, body, identity, protocol)
+        if (
+            require_nonstream_bidirectional
+            and shield.config.mode is not Mode.SHADOW
+            and payload.get("stream", False) is not False
+        ):
+            return JSONResponse(
+                status_code=503,
+                content=_stream_disabled_error(protocol),
+            )
         blocked = await _scan_request_payload(payload, identity, protocol)
         if blocked is not None:
             return blocked
