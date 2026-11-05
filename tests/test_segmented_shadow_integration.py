@@ -193,6 +193,46 @@ async def test_opt_in_shadow_proxy_preserves_bytes_and_reports_only_counts(monke
 
 
 @pytest.mark.asyncio
+async def test_opt_in_observation_respects_gateway_auth_and_provider_bearer(monkeypatch) -> None:
+    monkeypatch.delenv("SHADOWSHIELD_API_KEY", raising=False)
+    calls: list[httpx.Request] = []
+    body = json.dumps(
+        {"model": "fixture", "messages": [{"role": "user", "content": "a" * 320}]}
+    ).encode()
+    output = b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, headers={"content-type": "application/json"}, content=output)
+
+    app = create_proxy_app(
+        _shield(),
+        "http://upstream.test",
+        api_keys=["synthetic-gateway-key"],
+        transport=httpx.MockTransport(upstream),
+        experimental_shadow_segments=True,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://proxy.test"
+    ) as client:
+        blocked = await client.post("/v1/chat/completions", content=body)
+        response = await client.post(
+            "/v1/chat/completions",
+            content=body,
+            headers={
+                "content-type": "application/json",
+                "x-api-key": "synthetic-gateway-key",
+                "authorization": "Bearer synthetic-provider-key",
+            },
+        )
+    assert blocked.status_code == 401
+    assert response.status_code == 200 and response.content == output
+    assert len(calls) == 1 and calls[0].content == body
+    assert calls[0].headers["authorization"] == "Bearer synthetic-provider-key"
+    assert "x-api-key" not in calls[0].headers
+
+
+@pytest.mark.asyncio
 async def test_optional_observation_is_default_off_and_sse_is_excluded(monkeypatch) -> None:
     monkeypatch.delenv("SHADOWSHIELD_API_KEY", raising=False)
     shield = _shield()
