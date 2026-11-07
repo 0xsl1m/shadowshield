@@ -845,6 +845,70 @@ def _is_metadata_passthrough(method: str, full_path: str) -> bool:
     return method in {"GET", "HEAD"} and full_path in {"v1/models", "v1/models/"}
 
 
+def _is_minimal_text_chat_request(payload: dict[str, Any]) -> bool:
+    """Recognize a deliberately narrow Chat request, not source trust or safety.
+
+    Every accepted message content is sent through the normal input scanner.
+    Roles select no exemption. Unknown keys, nested content, tools, format
+    schemas and alternate protocols are rejected by the caller in this mode.
+    """
+    if set(payload) - {"model", "messages", "stream"}:
+        return False
+    model = payload.get("model")
+    if not isinstance(model, str) or not model or len(model) > 256:
+        return False
+    if payload.get("stream", False) is not False:
+        return False
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not 1 <= len(messages) <= 128:
+        return False
+    for message in messages:
+        if not isinstance(message, dict) or set(message) != {"role", "content"}:
+            return False
+        role = message.get("role")
+        if not isinstance(role, str) or role not in {"system", "developer", "user", "assistant"}:
+            return False
+        if not isinstance(message.get("content"), str):
+            return False
+    return True
+
+
+def _has_unique_json_object_keys(data: str) -> bool:
+    """Reject duplicate JSON keys so client and upstream cannot select different values."""
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in values:
+                raise ValueError("duplicate JSON key")
+            values[key] = value
+        return values
+
+    try:
+        json.loads(data, object_pairs_hook=unique_object)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return False
+    return True
+
+
+def _is_minimal_text_chat_response(payload: dict[str, Any]) -> bool:
+    """Recognize only a minimal synthetic response whose visible text is scanned."""
+    if set(payload) != {"choices"}:
+        return False
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not 1 <= len(choices) <= 128:
+        return False
+    for choice in choices:
+        if not isinstance(choice, dict) or set(choice) != {"message"}:
+            return False
+        message = choice.get("message")
+        if not isinstance(message, dict) or set(message) != {"role", "content"}:
+            return False
+        if message.get("role") != "assistant" or not isinstance(message.get("content"), str):
+            return False
+    return True
+
+
 def create_proxy_app(
     shield: Shield,
     upstream: str,
@@ -859,6 +923,7 @@ def create_proxy_app(
     allow_unscanned_model_metadata: bool = False,
     require_nonstream_bidirectional: bool = False,
     reject_incomplete_extraction: bool = False,
+    strict_minimal_text_chat: bool = False,
     suppress_nonstream_upstream_error_details: bool = False,
     bound_nonstream_success_response: bool = False,
     transport: Any | None = None,
@@ -889,6 +954,12 @@ def create_proxy_app(
             and successful responses with opaque, media or referenced content
             in enforcing modes. Requires the non-stream bidirectional option.
             This is not a guarantee of detector effectiveness or full coverage.
+        strict_minimal_text_chat: opt in to accepting only narrow text-only
+            Chat requests in enforcing modes. It requires incomplete-extraction
+            rejection, bounded non-stream success responses, upstream-error
+            withholding and no unscanned model-metadata lane. It does not
+            authenticate caller roles. The matching response filter accepts only
+            a synthetic minimal shape and rejects normal provider metadata.
         suppress_nonstream_upstream_error_details: in enforcing modes, withhold
             upstream 4xx/5xx bodies and headers on guarded non-stream requests.
             The upstream status remains unchanged. Default off for compatibility.
@@ -926,6 +997,18 @@ def create_proxy_app(
         raise TypeError("reject_incomplete_extraction must be a boolean")
     if reject_incomplete_extraction and not require_nonstream_bidirectional:
         raise ValueError("reject_incomplete_extraction requires non-stream bidirectional scanning")
+    if type(strict_minimal_text_chat) is not bool:
+        raise TypeError("strict_minimal_text_chat must be a boolean")
+    if strict_minimal_text_chat and (
+        not reject_incomplete_extraction
+        or not suppress_nonstream_upstream_error_details
+        or not bound_nonstream_success_response
+        or allow_unscanned_model_metadata
+    ):
+        raise ValueError(
+            "strict minimal text chat requires incomplete-extraction rejection, "
+            "bounded success, error withholding and no metadata bypass"
+        )
     if not scan_request or not scan_response:
         # A failed warning sink must not change existing forwarding behavior.
         with suppress(Exception):
@@ -1164,6 +1247,19 @@ def create_proxy_app(
                 receipt.emit(logger)
                 return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             receipt.record_scanned()
+            if (
+                strict_minimal_text_chat
+                and shield.config.mode is not Mode.SHADOW
+                and not _is_terminal(result)
+                and (
+                    result.decision is Decision.SANITIZE
+                    or (result.sanitized_text is not None and result.sanitized_text != result.text)
+                )
+            ):
+                # Structured wire rewriting is not implemented. Never forward
+                # original text when the engine requested sanitization.
+                receipt.emit(logger)
+                return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
             if _is_terminal(result) and shield.config.mode is not Mode.SHADOW:
                 logger.warning(
                     "shadowshield.proxy.request_blocked",
@@ -1238,6 +1334,19 @@ def create_proxy_app(
                         return JSONResponse(
                             status_code=503, content=_scan_unavailable_error(protocol)
                         )
+                if (
+                    strict_minimal_text_chat
+                    and shield.config.mode is not Mode.SHADOW
+                    and (
+                        protocol != _CHAT
+                        or parsed is None
+                        or not _has_unique_json_object_keys(response_text)
+                        or not _is_minimal_text_chat_response(parsed)
+                    )
+                ):
+                    receipt.mark("unknown_shape")
+                    receipt.emit(logger)
+                    return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
                 extraction = (
                     extract_response(parsed, protocol) if parsed is not None else Extraction()
                 )
@@ -1277,6 +1386,22 @@ def create_proxy_app(
                             status_code=503, content=_scan_unavailable_error(protocol)
                         )
                     receipt.record_scanned()
+                    if (
+                        strict_minimal_text_chat
+                        and shield.config.mode is not Mode.SHADOW
+                        and not _is_terminal(result)
+                        and (
+                            result.decision is Decision.SANITIZE
+                            or (
+                                result.sanitized_text is not None
+                                and result.sanitized_text != result.text
+                            )
+                        )
+                    ):
+                        receipt.emit(logger)
+                        return JSONResponse(
+                            status_code=503, content=_scan_unavailable_error(protocol)
+                        )
                     if _is_terminal(result) and shield.config.mode is not Mode.SHADOW:
                         logger.warning(
                             "shadowshield.proxy.response_blocked",
@@ -1767,6 +1892,21 @@ def create_proxy_app(
             return await _forward_non_stream(
                 request, target, body, identity, protocol, segment_budget
             )
+        if (
+            strict_minimal_text_chat
+            and shield.config.mode is not Mode.SHADOW
+            and (
+                protocol != _CHAT
+                or path not in {"/v1/chat/completions", "/v1/chat/completions/"}
+                or bool(request.url.query)
+                or not _has_unique_json_object_keys(decoded_body)
+                or not _is_minimal_text_chat_request(payload)
+            )
+        ):
+            receipt = CoverageReceipt(protocol, "request", "json")
+            receipt.mark("unknown_shape")
+            receipt.emit(logger)
+            return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
         if (
             require_nonstream_bidirectional
             and shield.config.mode is not Mode.SHADOW
