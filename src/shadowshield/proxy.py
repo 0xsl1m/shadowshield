@@ -1016,6 +1016,12 @@ def create_proxy_app(
             if shield.config.mode is not Mode.SHADOW:
                 return None, "detector_error"
             return result, "detector_error"
+        if result.metadata.get("decoded_segments_truncated") or result.metadata.get(
+            "findings_truncated"
+        ):
+            if reject_incomplete_extraction and shield.config.mode is not Mode.SHADOW:
+                return None, "budget_exceeded"
+            return result, "budget_exceeded"
         return result, None
 
     def _shadow_log(event: str, result: Any) -> None:
@@ -1149,7 +1155,9 @@ def create_proxy_app(
                 receipt.mark("budget_exceeded")
             result, scan_error = await _safe_scan(text, Direction.INPUT, identity)
             if scan_error is not None:
-                receipt.mark(scan_error, scanner_error=True)
+                if scan_error == "budget_exceeded":
+                    receipt.budget_exceeded = True
+                receipt.mark(scan_error, scanner_error=scan_error != "budget_exceeded")
             if result is None:
                 if shield.config.mode is Mode.SHADOW:
                     continue
@@ -1203,7 +1211,7 @@ def create_proxy_app(
                         receipt.text_units_discovered += 1
                     result, scan_error = await _safe_scan(prefix, Direction.OUTPUT, identity)
                     if scan_error is not None:
-                        receipt.mark(scan_error, scanner_error=True)
+                        receipt.mark(scan_error, scanner_error=scan_error != "budget_exceeded")
                     if result is not None and prefix:
                         receipt.record_scanned()
                     if result is not None and result.threats:
@@ -1258,7 +1266,9 @@ def create_proxy_app(
                         receipt.mark("budget_exceeded")
                     result, scan_error = await _safe_scan(text, Direction.OUTPUT, identity)
                     if scan_error is not None:
-                        receipt.mark(scan_error, scanner_error=True)
+                        if scan_error == "budget_exceeded":
+                            receipt.budget_exceeded = True
+                        receipt.mark(scan_error, scanner_error=scan_error != "budget_exceeded")
                     if result is None:
                         if shield.config.mode is Mode.SHADOW:
                             continue

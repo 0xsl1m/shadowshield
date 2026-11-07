@@ -33,8 +33,11 @@ The combined source changes have independent controls:
    by default and does not change shadow forwarding. This can reject legitimate
    image/file inputs, retained context, and opaque thinking signatures. It does
    not inspect those contents, guarantee schema completeness, establish detector
-   quality or make this policy ready for enforcement. This experimental code is
-   not exposed as a CLI flag and has not been deployed.
+   quality or make this policy ready for enforcement. Decoded-segment and finding
+   truncation are reported as incomplete; when this option is active they also
+   produce a 503 in enforcing mode. Unknown unrecognized fields and upstream
+   protocol changes can still escape extraction; no complete schema coverage is
+   claimed. This experimental code is not exposed as a CLI flag or deployed.
 
 Integration tests set the three enforcing options together with unscanned
 metadata disabled, and separately test all flags in shadow mode with long JSON.
