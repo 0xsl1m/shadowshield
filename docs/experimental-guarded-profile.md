@@ -25,6 +25,16 @@ The combined source changes have independent controls:
    bounded observations on long JSON text units in shadow mode only. It does
    not enable enforcement or alter existing coverage receipts, which can remain
    partial. It is off by default and rejects non-shadow mode.
+6. The Python-only `reject_incomplete_extraction=True` option requires the
+   bidirectional non-stream option and rejects guarded JSON requests and
+   successful responses whose extraction records opaque, media, referenced,
+   malformed, unknown or over-budget content. It returns a fixed 503 rather
+   than presenting an uninspectable fragment as a malicious finding. It is off
+   by default and does not change shadow forwarding. This can reject legitimate
+   image/file inputs, retained context, and opaque thinking signatures. It does
+   not inspect those contents, guarantee schema completeness, establish detector
+   quality or make this policy ready for enforcement. This experimental code is
+   not exposed as a CLI flag and has not been deployed.
 
 Integration tests set the three enforcing options together with unscanned
 metadata disabled, and separately test all flags in shadow mode with long JSON.

@@ -858,6 +858,7 @@ def create_proxy_app(
     stream_carry_chars: int = 2_048,
     allow_unscanned_model_metadata: bool = False,
     require_nonstream_bidirectional: bool = False,
+    reject_incomplete_extraction: bool = False,
     suppress_nonstream_upstream_error_details: bool = False,
     bound_nonstream_success_response: bool = False,
     transport: Any | None = None,
@@ -884,6 +885,10 @@ def create_proxy_app(
             and rejecting streaming requests on supported guarded routes in
             enforcing modes. This does not make unsupported, opaque or partial
             content fully inspected. Unsupported routes are rejected in enforcing modes.
+        reject_incomplete_extraction: opt in to rejecting guarded JSON requests
+            and successful responses with opaque, media or referenced content
+            in enforcing modes. Requires the non-stream bidirectional option.
+            This is not a guarantee of detector effectiveness or full coverage.
         suppress_nonstream_upstream_error_details: in enforcing modes, withhold
             upstream 4xx/5xx bodies and headers on guarded non-stream requests.
             The upstream status remains unchanged. Default off for compatibility.
@@ -917,6 +922,10 @@ def create_proxy_app(
         raise TypeError("require_nonstream_bidirectional must be a boolean")
     if require_nonstream_bidirectional and (scan_request is not True or scan_response is not True):
         raise ValueError("require_nonstream_bidirectional requires both scan directions")
+    if type(reject_incomplete_extraction) is not bool:
+        raise TypeError("reject_incomplete_extraction must be a boolean")
+    if reject_incomplete_extraction and not require_nonstream_bidirectional:
+        raise ValueError("reject_incomplete_extraction requires non-stream bidirectional scanning")
     if not scan_request or not scan_response:
         # A failed warning sink must not change existing forwarding behavior.
         with suppress(Exception):
@@ -1118,6 +1127,13 @@ def create_proxy_app(
             return None
         extraction = extract_request(payload, protocol)
         receipt.record_extraction(extraction)
+        if (
+            reject_incomplete_extraction
+            and not extraction.complete
+            and shield.config.mode is not Mode.SHADOW
+        ):
+            receipt.emit(logger)
+            return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
         if extraction.enforcement_gap:
             logger.warning("shadowshield.proxy.request_extraction_limit")
             if shield.config.mode is not Mode.SHADOW:
@@ -1214,8 +1230,17 @@ def create_proxy_app(
                         return JSONResponse(
                             status_code=503, content=_scan_unavailable_error(protocol)
                         )
-                extraction = extract_response(parsed, protocol) if parsed else Extraction()
+                extraction = (
+                    extract_response(parsed, protocol) if parsed is not None else Extraction()
+                )
                 receipt.record_extraction(extraction)
+                if (
+                    reject_incomplete_extraction
+                    and not extraction.complete
+                    and shield.config.mode is not Mode.SHADOW
+                ):
+                    receipt.emit(logger)
+                    return JSONResponse(status_code=503, content=_scan_unavailable_error(protocol))
                 extraction_limited = parsed is not None and extraction.enforcement_gap
                 if extraction_limited:
                     logger.warning("shadowshield.proxy.response_extraction_limit")
