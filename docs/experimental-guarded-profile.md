@@ -25,6 +25,38 @@ The combined source changes have independent controls:
    bounded observations on long JSON text units in shadow mode only. It does
    not enable enforcement or alter existing coverage receipts, which can remain
    partial. It is off by default and rejects non-shadow mode.
+6. The Python-only `reject_incomplete_extraction=True` option requires the
+   bidirectional non-stream option and rejects guarded JSON requests and
+   successful responses whose extraction records opaque, media, referenced,
+   malformed, unknown or over-budget content. It returns a fixed 503 rather
+   than presenting an uninspectable fragment as a malicious finding. It is off
+   by default and does not change shadow forwarding. This can reject legitimate
+   image/file inputs, retained context, and opaque thinking signatures. It does
+   not inspect those contents, guarantee schema completeness, establish detector
+   quality or make this policy ready for enforcement. Decoded-segment and finding
+   truncation are reported as incomplete; when this option is active they also
+   produce a 503 in enforcing mode. Unknown unrecognized fields and upstream
+   protocol changes can still escape extraction; no complete schema coverage is
+   claimed. This experimental code is not exposed as a CLI flag or deployed.
+7. The separate `strict_minimal_text_chat=True` experimental option admits
+   only POST Chat Completions without query strings and a minimal body with
+   `model`, `messages` and optional `stream: false`; duplicate JSON keys are
+   rejected to avoid parser ambiguity. Each message must contain
+   only `role` and string `content`. It denies all other protocols, tools,
+   format schemas, options, attachments and unknown fields. It requires
+   incomplete-extraction rejection, bounded successful responses, upstream-error
+   withholding and refuses the unscanned metadata bypass.
+   All message content is scanned regardless of caller-supplied role; roles do
+   not convey trust. Successful responses must be a minimal synthetic shape:
+   an object containing only `choices`, each with only a `message` containing
+   only assistant `role` and string `content`. Response duplicate keys, normal
+   provider metadata, usage, refusals, and tool calls are rejected. Shadow
+   forwarding is unchanged. This is deliberately incompatible with ordinary
+   provider responses. It does not establish full coverage, qualify the
+   detector or prove client compatibility. If the engine requests sanitization
+   or returns modified text, the proxy rejects instead of forwarding the
+   original or attempting an unvalidated structured rewrite. This can increase
+   benign disruption; evaluations must count these rejections.
 
 Integration tests set the three enforcing options together with unscanned
 metadata disabled, and separately test all flags in shadow mode with long JSON.

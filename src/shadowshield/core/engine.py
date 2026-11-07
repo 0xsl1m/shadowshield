@@ -220,6 +220,10 @@ class Engine:
             severity=severity,
             decision=decision,
         )
+        # This bounded scan context can omit encoded fragments. Expose only
+        # the content-free fact so callers do not report a complete scan.
+        if context.metadata.get("decoded_segments_truncated"):
+            result.metadata["decoded_segments_truncated"] = True
         truncated_findings = int(context.metadata.get("findings_truncated", 0))
         if truncated_findings:
             result.metadata["findings_truncated"] = truncated_findings

@@ -568,6 +568,8 @@ def extract_request(payload: dict[str, Any], protocol: str) -> Extraction:
                     result.mark_malformed()
                     continue
                 _walk_openai(message, result)
+                if message.get("audio") is not None:
+                    result.media_units += 1
                 function_call = message.get("function_call")
                 if isinstance(function_call, dict):
                     _add_json(result, function_call.get("arguments"), required=True)
@@ -595,6 +597,15 @@ def extract_request(payload: dict[str, Any], protocol: str) -> Extraction:
             for tool in tools[:MAX_ITEMS]:
                 _add_json(result, tool, required=True)
         elif tools is not None:
+            result.mark_malformed()
+        # Legacy Chat Completions function schemas carry text just like tools.
+        functions = payload.get("functions")
+        if isinstance(functions, list):
+            if len(functions) > MAX_ITEMS:
+                result.budget_exceeded = True
+            for function in functions[:MAX_ITEMS]:
+                _add_json(result, function, required=True)
+        elif functions is not None:
             result.mark_malformed()
         return result
 
@@ -689,6 +700,16 @@ def extract_response(payload: dict[str, Any], protocol: str) -> Extraction:
         message = choice.get("message")
         if isinstance(message, dict):
             _walk_openai(message, result)
+            # Audio bytes and provider transcripts are not inspected as plain
+            # text by this extractor; count the output as a coverage gap.
+            if message.get("audio") is not None:
+                result.media_units += 1
+            refusal = message.get("refusal")
+            if refusal is not None:
+                if isinstance(refusal, str):
+                    result.add_text(refusal)
+                else:
+                    result.mark_malformed()
             function_call = message.get("function_call")
             if isinstance(function_call, dict):
                 _add_json(result, function_call.get("arguments"), required=True)
