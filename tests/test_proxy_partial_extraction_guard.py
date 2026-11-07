@@ -99,6 +99,39 @@ async def test_shadow_preserves_incomplete_request_and_response_bytes():
     assert response.headers["x-test"] == "preserved"
 
 
+@pytest.mark.parametrize("mode", ["balanced", "shadow"])
+async def test_anthropic_thinking_signature_is_incomplete_without_live_provider(mode):
+    calls = []
+    body = json.dumps(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "hello",
+                            "signature": "synthetic-signature",
+                        }
+                    ],
+                }
+            ]
+        }
+    ).encode()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(mode, calls)), base_url="http://proxy.test"
+    ) as client:
+        response = await client.post(
+            "/v1/messages", content=body, headers={"x-api-key": "gateway-test"}
+        )
+    if mode == "balanced":
+        assert response.status_code == 503 and not calls
+        assert response.json()["type"] == "error"
+        assert response.json()["error"]["type"] == "api_error"
+    else:
+        assert response.status_code == 200 and calls[0].content == body
+
+
 async def test_complete_text_remains_accepted():
     calls = []
     async with httpx.AsyncClient(
